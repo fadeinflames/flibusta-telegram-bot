@@ -1,6 +1,7 @@
 import os
 import traceback
 from urllib.error import HTTPError
+from functools import wraps
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import CallbackContext
@@ -10,7 +11,73 @@ from src.custom_logging import get_logger
 
 logger = get_logger(__name__)
 
+# Получаем список разрешенных пользователей из переменной окружения
+# Формат в .env: ALLOWED_USERS=123456789,987654321,555666777
+ALLOWED_USERS = os.getenv('ALLOWED_USERS', '').split(',')
+ALLOWED_USERS = [user_id.strip() for user_id in ALLOWED_USERS if user_id.strip()]
 
+
+def check_access(func):
+    """Декоратор для проверки доступа пользователя"""
+    @wraps(func)
+    async def wrapper(update: Update, context: CallbackContext):
+        user_id = str(update.effective_user.id)
+        
+        # Если список пустой, разрешаем всем (обратная совместимость)
+        if not ALLOWED_USERS:
+            return await func(update, context)
+        
+        # Проверяем, есть ли пользователь в списке разрешенных
+        if user_id not in ALLOWED_USERS:
+            logger.warning(
+                msg="Unauthorized access attempt",
+                extra={
+                    "user_id": user_id,
+                    "user_name": update.effective_user.name,
+                    "user_full_name": update.effective_user.full_name,
+                }
+            )
+            await update.message.reply_text(
+                "⛔ У вас нет доступа к этому боту.\n"
+                "Обратитесь к администратору для получения доступа."
+            )
+            return
+        
+        return await func(update, context)
+    
+    return wrapper
+
+
+def check_callback_access(func):
+    """Декоратор для проверки доступа при callback запросах"""
+    @wraps(func)
+    async def wrapper(update: Update, context: CallbackContext):
+        user_id = str(update.effective_user.id)
+        
+        # Если список пустой, разрешаем всем (обратная совместимость)
+        if not ALLOWED_USERS:
+            return await func(update, context)
+        
+        # Проверяем, есть ли пользователь в списке разрешенных
+        if user_id not in ALLOWED_USERS:
+            logger.warning(
+                msg="Unauthorized callback access attempt",
+                extra={
+                    "user_id": user_id,
+                    "user_name": update.effective_user.name,
+                    "user_full_name": update.effective_user.full_name,
+                }
+            )
+            query = update.callback_query
+            await query.answer("У вас нет доступа к этому боту", show_alert=True)
+            return
+        
+        return await func(update, context)
+    
+    return wrapper
+
+
+@check_access
 async def start_callback(update: Update, _: CallbackContext):
     await update.message.reply_text(
             "Введите название книги (без автора) ИЛИ добавьте фамилию автора на новой строке. \n"
@@ -22,6 +89,7 @@ async def start_callback(update: Update, _: CallbackContext):
     )
 
 
+@check_access
 async def find_the_book(update: Update, context: CallbackContext) -> None:
     if len(update.message.text.split('\n')) == 2:
         log_author = update.message.text.split('\n')[1]
@@ -97,6 +165,7 @@ async def find_the_book(update: Update, context: CallbackContext) -> None:
             await update.message.reply_text("Выберите книгу:", reply_markup=reply_markup)
 
 
+@check_callback_access
 async def button(update: Update, context: CallbackContext) -> None:
     query = update.callback_query
     await query.answer()
@@ -203,5 +272,27 @@ async def get_book_by_format(data: str, update: Update, context: CallbackContext
         )
 
 
+@check_access
 async def help_command(update: Update, _: CallbackContext) -> None:
     await update.message.reply_text("Нажмите /start чтобы начать")
+
+
+# Команда для администратора для проверки списка разрешенных пользователей
+@check_access
+async def list_allowed_users(update: Update, _: CallbackContext) -> None:
+    """Команда для отображения списка разрешенных пользователей (только для админов)"""
+    user_id = str(update.effective_user.id)
+    
+    # Проверяем, является ли пользователь первым в списке (админом)
+    if ALLOWED_USERS and user_id == ALLOWED_USERS[0]:
+        if ALLOWED_USERS:
+            users_list = "\n".join([f"• {user}" for user in ALLOWED_USERS])
+            await update.message.reply_text(
+                f"📋 Список разрешенных пользователей:\n\n{users_list}\n\n"
+                f"Всего: {len(ALLOWED_USERS)} пользователей"
+            )
+        else:
+            await update.message.reply_text("⚠️ Список разрешенных пользователей пуст. Доступ открыт для всех.")
+    else:
+        await update.message.reply_text("У вас нет прав для просмотра этой информации.")
+
