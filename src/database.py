@@ -305,21 +305,23 @@ def get_user_downloads(user_id: str, limit: int = 10) -> List[Dict]:
         ''', (user_id, limit))
         return [dict(row) for row in cursor.fetchall()]
 
-
-# Функции для работы с кэшем книг
 def cache_book(book):
     """Закэшировать информацию о книге"""
     with get_db() as conn:
         cursor = conn.cursor()
         formats_json = json.dumps(book.formats)
+        
+        # Безопасно получаем атрибуты с значениями по умолчанию
+        series = getattr(book, 'series', '')
+        year = getattr(book, 'year', '')
+        
         cursor.execute('''
             INSERT OR REPLACE INTO books_cache 
             (book_id, title, author, link, formats, cover, size, series, year)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (book.id, book.title, book.author, book.link, formats_json, 
-              book.cover, book.size, book.series, book.year))
+              book.cover, book.size, series, year))
         conn.commit()
-
 
 def get_cached_book(book_id: str) -> Optional[Dict]:
     """Получить книгу из кэша"""

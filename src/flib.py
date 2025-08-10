@@ -18,10 +18,11 @@ class Book:
         self.formats = {}
         self.cover = ''
         self.size = ''
+        self.series = ''  # Добавлено
+        self.year = ''    # Добавлено
 
     def __str__(self):
         return f'{self.title} - {self.author} ({self.id})'
-
 
 def get_page(url):
     """Получение страницы"""

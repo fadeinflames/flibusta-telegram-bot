@@ -484,82 +484,104 @@ async def universal_search(update: Update, _: CallbackContext):
         parse_mode=ParseMode.MARKDOWN
     )
 
-
 @check_access
 async def find_the_book(update: Update, context: CallbackContext) -> None:
-    """Обработка текстовых сообщений (старый интерфейс)"""
+    """Обработка текстовых сообщений - интерпретируем как поиск по названию"""
     # Проверяем, не является ли это командой
     if update.message.text.startswith('/'):
         return
     
     user_id = str(update.effective_user.id)
+    search_string = update.message.text.strip()
     
-    if len(update.message.text.split('\n')) == 2:
-        log_author = update.message.text.split('\n')[1]
+    # Если в тексте есть перенос строки, используем старую логику (название + автор)
+    if "\n" in search_string:
+        # Старая логика для обратной совместимости
+        title, author = search_string.split("\n", maxsplit=1)
+        
+        logger.info(
+            msg="combined search",
+            extra={
+                "command": "find_the_book",
+                "user_id": user_id,
+                "user_name": update.effective_user.name,
+                "user_full_name": update.effective_user.full_name,
+                "book_name": title,
+                "author": author,
+            }
+        )
+        
+        mes = await update.message.reply_text("🔍 Ищу книгу по названию и автору...")
+        
+        try:
+            books = flib.scrape_books_mbl(title, author)
+            
+            # Записываем в историю
+            db.add_search_history(user_id, "exact", f"{title} | {author}", len(books) if books else 0)
+            
+            if not books:
+                await context.bot.deleteMessage(chat_id=mes.chat_id, message_id=mes.message_id)
+                await update.message.reply_text(
+                    f"😔 Книга «{title}» автора «{author}» не найдена.\n"
+                    "Попробуйте использовать команды /title или /author для более широкого поиска."
+                )
+                return
+            
+            # Сохраняем для пагинации
+            context.user_data['search_results'] = books
+            context.user_data['search_type'] = 'точному поиску'
+            context.user_data['search_query'] = f"{title} | {author}"
+            
+            await show_books_page(books, update, context, mes, page=1)
+            
+        except Exception as e:
+            await handle_error(e, update, context, mes)
+    
     else:
-        log_author = None
+        # Простой текст интерпретируем как поиск по названию
+        logger.info(
+            msg="search by title (text message)",
+            extra={
+                "command": "find_the_book",
+                "user_id": user_id,
+                "user_name": update.effective_user.name,
+                "user_full_name": update.effective_user.full_name,
+                "book_name": search_string,
+            }
+        )
         
-    logger.info(
-        msg="find the book",
-        extra={
-            "command": "find_the_book",
-            "user_id": user_id,
-            "user_name": update.effective_user.name,
-            "user_full_name": update.effective_user.full_name,
-            "book_name": update.message.text.split('\n')[0],
-            "author": log_author,
-        }
-    )
-
-    search_string = update.message.text
-    mes = await update.message.reply_text("🔍 Подождите, идёт поиск...")
-
-    err_author = False
-    try:
-        libr = []
-        if "\n" in search_string:
-            title, author = search_string.split("\n", maxsplit=1)
-            if len(author.split(" ")) > 1:
-                err_author = True
-            scr_lib = flib.scrape_books_mbl(title, author)
-            if scr_lib:
-                libr += scr_lib
-        else:
-            libr_t = flib.scrape_books_by_title(search_string)
-            libr_a = flib.scrape_books_by_author(search_string)
-            if libr_t:
-                libr += libr_t
-            if libr_a:
-                libr += [book for nested_list in libr_a for book in nested_list]
+        mes = await update.message.reply_text("🔍 Ищу книги по названию...")
         
-        if search_string.isdigit():
-            book_by_id = flib.get_book_by_id(search_string)
-            if book_by_id:
-                libr.append(book_by_id)
-                db.cache_book(book_by_id)
-        
-        # Записываем в историю
-        db.add_search_history(user_id, "text", search_string, len(libr))
-
-    except (AttributeError, HTTPError) as e:
-        await handle_error(e, update, context, mes)
-        return
-
-    if not libr:
-        await context.bot.deleteMessage(chat_id=mes.chat_id, message_id=mes.message_id)
-        await update.message.reply_text("😔 К сожалению, ничего не найдено")
-        if err_author:
-            await update.message.reply_text(
-                "⚠️ Вероятно вместо фамилии автора на второй строке было указано что-то ещё"
-            )
-    else:
-        # Сохраняем для пагинации
-        context.user_data['search_results'] = libr
-        context.user_data['search_type'] = 'универсальному поиску'
-        context.user_data['search_query'] = search_string[:30] + "..." if len(search_string) > 30 else search_string
-        
-        await show_books_page(libr, update, context, mes, page=1)
-
+        try:
+            books = flib.scrape_books_by_title(search_string)
+            
+            # Записываем в историю поиска
+            db.add_search_history(user_id, "title", search_string, len(books) if books else 0)
+            
+            if not books:
+                await context.bot.deleteMessage(chat_id=mes.chat_id, message_id=mes.message_id)
+                
+                # Предлагаем альтернативы
+                await update.message.reply_text(
+                    f"😔 По запросу «{search_string}» книги не найдены.\n\n"
+                    "💡 *Попробуйте:*\n"
+                    "• Проверить правописание\n"
+                    "• Использовать `/author` для поиска по автору\n"
+                    "• Добавить автора на новой строке для точного поиска:\n"
+                    f"```\n{search_string}\nФамилия автора\n```",
+                    parse_mode=ParseMode.MARKDOWN
+                )
+                return
+            
+            # Сохраняем результаты поиска в контексте для пагинации
+            context.user_data['search_results'] = books
+            context.user_data['search_type'] = 'названию'
+            context.user_data['search_query'] = search_string
+            
+            await show_books_page(books, update, context, mes, page=1)
+            
+        except Exception as e:
+            await handle_error(e, update, context, mes)
 
 async def handle_error(error, update: Update, context: CallbackContext, mes):
     """Обработка ошибок"""
