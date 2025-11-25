@@ -1,10 +1,10 @@
 import os
-import asyncio
 from datetime import time
 
 from dotenv import load_dotenv
 from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, MessageHandler
 from telegram.ext.filters import TEXT
+from telegram.request import HTTPXRequest
 
 from src.tg_bot import (
     start_callback, 
@@ -38,7 +38,39 @@ def main():
     db.init_database()
     print("✅ База данных инициализирована")
 
-    app = ApplicationBuilder().token(os.getenv("TOKEN")).build()
+    # Получаем токен
+    token = os.getenv("TOKEN")
+    if not token:
+        print("❌ ОШИБКА: Токен не найден в .env файле!")
+        print("💡 Добавьте строку: TOKEN=your_bot_token_here")
+        return
+    
+    print(f"🔑 Токен: {token[:10]}...{token[-5:]}")
+    
+    # Настройка HTTPXRequest с увеличенными таймаутами
+    proxy_url = os.getenv("TELEGRAM_PROXY")
+    
+    request_kwargs = {
+        'connection_pool_size': 8,
+        'connect_timeout': 20.0,
+        'read_timeout': 20.0,
+        'write_timeout': 20.0,
+        'pool_timeout': 20.0,
+    }
+    
+    if proxy_url:
+        print(f"🌐 Используется прокси: {proxy_url}")
+        request_kwargs['proxy'] = proxy_url
+    else:
+        print("🌐 Прямое подключение (без прокси)")
+    
+    request = HTTPXRequest(**request_kwargs)
+    
+    # Создаем приложение с настроенным request
+    app = ApplicationBuilder() \
+        .token(token) \
+        .request(request) \
+        .build()
     
     # ===== ОСНОВНЫЕ КОМАНДЫ =====
     app.add_handler(CommandHandler("start", start_callback))
@@ -107,8 +139,42 @@ def main():
     print()
     print("💡 Подсказка: начните с команды /start")
     print("=" * 50)
+    print()
     
-    app.run_polling()
+    # Запуск бота
+    try:
+        print("🔄 Подключаемся к Telegram API...")
+        app.run_polling(
+            drop_pending_updates=True,
+            allowed_updates=['message', 'callback_query']
+        )
+    except KeyboardInterrupt:
+        print("\n🛑 Получен сигнал остановки (Ctrl+C)")
+        print("✅ Бот остановлен")
+    except Exception as e:
+        error_type = type(e).__name__
+        print(f"\n❌ ОШИБКА: {error_type}")
+        print(f"   Детали: {str(e)}\n")
+        
+        if "TimedOut" in error_type or "ConnectTimeout" in error_type or "Timeout" in str(e):
+            print("💡 ВОЗМОЖНЫЕ РЕШЕНИЯ:")
+            print("   1. Проверьте подключение к интернету")
+            print("   2. Попробуйте увеличить таймауты")
+            print("   3. Проверьте, не блокирует ли файрвол подключение")
+            print("   4. Убедитесь, что api.telegram.org доступен:")
+            print("      curl -I https://api.telegram.org")
+        elif "Unauthorized" in error_type or "Unauthorized" in str(e):
+            print("💡 РЕШЕНИЕ:")
+            print("   - Проверьте правильность токена бота в .env файле")
+            print("   - Получите новый токен у @BotFather в Telegram")
+        else:
+            print("💡 Для диагностики:")
+            print("   - Проверьте логи выше")
+            print("   - Убедитесь что TOKEN указан в .env")
+            print("   - Проверьте права доступа к базе данных")
+        
+        print("\n" + "=" * 50)
+        raise
 
 
 if __name__ == "__main__":
