@@ -1,7 +1,7 @@
 import os
 import traceback
-import base64
 from urllib.error import HTTPError
+from urllib.parse import quote, unquote
 from functools import wraps
 from enum import Enum
 import re
@@ -779,9 +779,10 @@ async def show_book_details_with_favorite(book_id: str, update: Update, context:
     # Кнопки форматов
     for b_format in book.formats:
         text = f"📥 Скачать {b_format}"
-        # Используем base64 для безопасной передачи формата (может содержать спецсимволы)
-        format_encoded = base64.b64encode(b_format.encode('utf-8')).decode('ascii')
-        callback_data = f"get_book_by_format_{book_id}_{format_encoded}"
+        # Используем URL-кодирование для безопасной передачи формата (может содержать спецсимволы)
+        # Используем разделитель | который точно не будет в формате
+        format_encoded = quote(b_format, safe='')
+        callback_data = f"get_book_by_format_{book_id}|{format_encoded}"
         kb.append([InlineKeyboardButton(text, callback_data=callback_data)])
     
     # Кнопка назад
@@ -1094,16 +1095,30 @@ async def button(update: Update, context: CallbackContext) -> None:
     
     # Обработка скачивания книги по формату
     if data.startswith("get_book_by_format_"):
-        parts = data.split("_", 4)  # get_book_by_format_{book_id}_{format_encoded}
-        if len(parts) >= 5:
-            book_id = parts[3]
-            format_encoded = parts[4]
-            try:
-                book_format = base64.b64decode(format_encoded.encode('ascii')).decode('utf-8')
+        # Формат: get_book_by_format_{book_id}|{format_encoded}
+        try:
+            # Убираем префикс и разбиваем по |
+            data_part = data[len("get_book_by_format_"):]
+            if "|" in data_part:
+                book_id, format_encoded = data_part.split("|", 1)
+                book_format = unquote(format_encoded)
                 await get_book_by_format(book_id, book_format, update, context)
-            except Exception as e:
-                logger.error(f"Error decoding format: {e}", exc_info=e)
-                await query.answer("Ошибка при обработке формата", show_alert=True)
+            else:
+                # Старый формат для обратной совместимости
+                parts = data.split("_", 4)
+                if len(parts) >= 5:
+                    book_id = parts[3]
+                    format_encoded = parts[4]
+                    # Пробуем декодировать как URL, если не получится - как base64
+                    try:
+                        book_format = unquote(format_encoded)
+                    except Exception:
+                        import base64
+                        book_format = base64.b64decode(format_encoded.encode('ascii')).decode('utf-8')
+                    await get_book_by_format(book_id, book_format, update, context)
+        except Exception as e:
+            logger.error(f"Error decoding format: {e}", exc_info=e)
+            await query.answer("Ошибка при обработке формата", show_alert=True)
         return
     
     # Обработка настроек
