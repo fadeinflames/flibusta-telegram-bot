@@ -701,11 +701,26 @@ async def show_books_page(books, update: Update, context: CallbackContext, mes, 
     else:
         # Для callback queries
         query = update.callback_query
-        await query.edit_message_text(
-            header_text,
-            parse_mode=ParseMode.MARKDOWN,
-            reply_markup=reply_markup
-        )
+        try:
+            # Пытаемся отредактировать сообщение
+            await query.edit_message_text(
+                header_text,
+                parse_mode=ParseMode.MARKDOWN,
+                reply_markup=reply_markup
+            )
+        except Exception:
+            # Если не получилось (например, предыдущее сообщение было фото),
+            # удаляем старое и отправляем новое
+            try:
+                await query.delete_message()
+            except Exception:
+                pass
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text=header_text,
+                parse_mode=ParseMode.MARKDOWN,
+                reply_markup=reply_markup
+            )
 
 
 async def show_book_details_with_favorite(book_id: str, update: Update, context: CallbackContext):
