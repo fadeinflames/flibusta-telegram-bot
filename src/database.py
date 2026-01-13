@@ -327,14 +327,17 @@ def get_cached_book(book_id: str) -> Optional[Dict]:
     """Получить книгу из кэша"""
     with get_db() as conn:
         cursor = conn.cursor()
-        cursor.execute('''
-            UPDATE books_cache 
-            SET access_count = access_count + 1 
-            WHERE book_id = ?
-        ''', (book_id,))
+        # Сначала проверяем существование записи
         cursor.execute('SELECT * FROM books_cache WHERE book_id = ?', (book_id,))
         row = cursor.fetchone()
         if row:
+            # Обновляем счетчик доступа только если запись существует
+            cursor.execute('''
+                UPDATE books_cache 
+                SET access_count = access_count + 1 
+                WHERE book_id = ?
+            ''', (book_id,))
+            conn.commit()
             book_dict = dict(row)
             book_dict['formats'] = json.loads(book_dict['formats'])
             return book_dict
@@ -457,18 +460,18 @@ def cleanup_old_data(days: int = 30):
     with get_db() as conn:
         cursor = conn.cursor()
         
-        # Удаляем старую историю поиска
+        # Удаляем старую историю поиска (используем параметризованный запрос)
         cursor.execute('''
             DELETE FROM search_history 
-            WHERE timestamp < datetime('now', '-' || ? || ' days')
-        ''', (days,))
+            WHERE timestamp < datetime('now', '-' || CAST(? AS TEXT) || ' days')
+        ''', (str(days),))
         
         # Удаляем старый кэш книг, которые не использовались
         cursor.execute('''
             DELETE FROM books_cache 
-            WHERE cached_date < datetime('now', '-' || ? || ' days')
+            WHERE cached_date < datetime('now', '-' || CAST(? AS TEXT) || ' days')
             AND access_count < 2
-        ''', (days,))
+        ''', (str(days),))
         
         conn.commit()
 

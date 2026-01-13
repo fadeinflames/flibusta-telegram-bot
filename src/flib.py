@@ -27,13 +27,14 @@ class Book:
 def get_page(url):
     """Получение страницы"""
     try:
-        r = urllib.request.urlopen(url)
-        html_bytes = r.read()
-        html = html_bytes.decode("utf-8")
-        parser = "html.parser"
-        soup = BeautifulSoup(html, parser)
+        # Используем requests для единообразия и лучшей обработки ошибок
+        response = requests.get(url, timeout=30, headers={
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        })
+        response.raise_for_status()
+        soup = BeautifulSoup(response.text, "html.parser")
         return soup
-    except Exception:
+    except (requests.exceptions.RequestException, Exception) as e:
         return None
 
 
@@ -284,9 +285,15 @@ def get_book_by_id(book_id):
     if book.title == "Книги":
         return None
     
-    # Размер книги
-    size_span = sp.find('span', attrs={'style': 'size'})
-    if size_span:
+    # Размер книги - ищем в разных местах
+    # Ищем span с размером
+    size_span = target_div.find('span', string=re.compile(r'\d+.*[МК]Б'))
+    if not size_span:
+        # Пробуем найти в тексте страницы
+        size_elements = target_div.find_all(string=re.compile(r'Размер.*?\d+.*?[МК]Б'))
+        if size_elements:
+            book.size = size_elements[0].strip()
+    else:
         book.size = size_span.text.strip()
 
     # Обложка
@@ -316,50 +323,77 @@ def get_book_by_id(book_id):
 
 def download_book_cover(book: Book):
     """Скачивание обложки книги"""
-    if not book.cover:
+    if not book or not hasattr(book, 'cover') or not book.cover:
         return
         
     try:
-        c_response = requests.get(book.cover, timeout=10)
-        if c_response.ok:
-            c_full_path = os.path.join(os.getcwd(), "books", book.id, 'cover.jpg')
-            os.makedirs(os.path.dirname(c_full_path), exist_ok=True)
-            with open(c_full_path, "wb") as f:
-                f.write(c_response.content)
+        c_response = requests.get(
+            book.cover, 
+            timeout=10,
+            headers={
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            }
+        )
+        c_response.raise_for_status()
+        
+        books_dir = os.path.join(os.getcwd(), "books")
+        cover_dir = os.path.join(books_dir, book.id)
+        os.makedirs(cover_dir, exist_ok=True)
+        
+        c_full_path = os.path.join(cover_dir, 'cover.jpg')
+        with open(c_full_path, "wb") as f:
+            f.write(c_response.content)
     except Exception:
-        pass
+        pass  # Игнорируем ошибки при скачивании обложки
 
 
 def download_book(book: Book, b_format: str):
     """Скачивание книги в указанном формате"""
-    if b_format not in book.formats:
+    if not book or not hasattr(book, 'formats') or b_format not in book.formats:
         return None, None
         
     book_url = book.formats[b_format]
 
     try:
-        b_response = requests.get(book_url, timeout=30)
+        b_response = requests.get(
+            book_url, 
+            timeout=30,
+            headers={
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            }
+        )
         
-        if not b_response.ok:
-            return None, None
+        b_response.raise_for_status()
 
         # Получаем имя файла из заголовков
         content_disposition = b_response.headers.get('content-disposition', '')
         if 'filename=' in content_disposition:
             n_index = content_disposition.index('filename=')
             b_filename = content_disposition[n_index + 9:].replace('"', '').replace("'", '')
+            # Обрабатываем кодировку в filename (RFC 5987)
+            if b_filename.startswith("UTF-8''"):
+                b_filename = urllib.parse.unquote(b_filename[7:])
             if b_filename.endswith('.fb2.zip'):
                 b_filename = b_filename.replace('.zip', '')
         else:
             # Генерируем имя файла
             ext = b_format.split('(')[1].split(')')[0] if '(' in b_format else 'txt'
+            # Очищаем расширение от лишних символов
+            ext = re.sub(r'[^a-zA-Z0-9]', '', ext.lower())
             b_filename = f"{book.title} - {book.author}.{ext}"
-            # Убираем недопустимые символы
-            b_filename = re.sub(r'[<>:"/\\|?*]', '_', b_filename)
+            # Убираем недопустимые символы для Windows/Linux
+            b_filename = re.sub(r'[<>:"/\\|?*\x00-\x1f]', '_', b_filename)
+            # Ограничиваем длину имени файла
+            if len(b_filename) > 200:
+                name_part = b_filename[:190]
+                ext_part = b_filename[-10:]
+                b_filename = name_part + ext_part
 
         return b_response.content, b_filename
         
     except requests.exceptions.Timeout:
+        return None, None
+    except requests.exceptions.RequestException as e:
         return None, None
     except Exception:
         return None, None

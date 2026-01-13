@@ -34,10 +34,13 @@ class CustomJSONFormatter(JSONFormatter):
 
 formatter = CustomJSONFormatter()
 
+# basicConfig не поддерживает encoding напрямую, используем handlers
 logging.basicConfig(
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-        encoding="utf-8",
         level=logging.INFO,
+        handlers=[
+            logging.StreamHandler(sys.stdout)
+        ]
 )
 
 

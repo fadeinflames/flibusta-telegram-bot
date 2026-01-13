@@ -1,5 +1,6 @@
 import os
 import traceback
+import base64
 from urllib.error import HTTPError
 from functools import wraps
 from enum import Enum
@@ -230,7 +231,7 @@ async def search_by_title(update: Update, context: CallbackContext) -> None:
         db.add_search_history(user_id, "title", title, len(books) if books else 0)
         
         if not books:
-            await context.bot.deleteMessage(chat_id=mes.chat_id, message_id=mes.message_id)
+            await context.bot.delete_message(chat_id=mes.chat_id, message_id=mes.message_id)
             await update.message.reply_text(
                 f"😔 По запросу «{title}» ничего не найдено.\n"
                 "Попробуйте изменить запрос или использовать другую команду."
@@ -281,7 +282,7 @@ async def search_by_author(update: Update, context: CallbackContext) -> None:
         # ИСПРАВЛЕНО: проверяем правильно
         if not authors_books or len(authors_books) == 0:
             db.add_search_history(user_id, "author", author, 0)
-            await context.bot.deleteMessage(chat_id=mes.chat_id, message_id=mes.message_id)
+            await context.bot.delete_message(chat_id=mes.chat_id, message_id=mes.message_id)
             await update.message.reply_text(
                 f"😔 Автор «{author}» не найден.\n"
                 "Попробуйте:\n"
@@ -299,7 +300,7 @@ async def search_by_author(update: Update, context: CallbackContext) -> None:
         # Если после объединения книг нет
         if not all_books:
             db.add_search_history(user_id, "author", author, 0)
-            await context.bot.deleteMessage(chat_id=mes.chat_id, message_id=mes.message_id)
+            await context.bot.delete_message(chat_id=mes.chat_id, message_id=mes.message_id)
             await update.message.reply_text(
                 f"😔 У автора «{author}» нет доступных книг."
             )
@@ -378,7 +379,7 @@ async def search_exact(update: Update, context: CallbackContext) -> None:
         db.add_search_history(user_id, "exact", f"{title} | {author}", len(books) if books else 0)
         
         if not books:
-            await context.bot.deleteMessage(chat_id=mes.chat_id, message_id=mes.message_id)
+            await context.bot.delete_message(chat_id=mes.chat_id, message_id=mes.message_id)
             await update.message.reply_text(
                 f"😔 Книга «{title}» автора «{author}» не найдена.\n"
                 "Попробуйте команды /title или /author для более широкого поиска."
@@ -450,16 +451,14 @@ async def search_by_id(update: Update, context: CallbackContext) -> None:
         db.add_search_history(user_id, "id", book_id, 1 if book else 0)
         
         if not book:
-            await context.bot.deleteMessage(chat_id=mes.chat_id, message_id=mes.message_id)
+            await context.bot.delete_message(chat_id=mes.chat_id, message_id=mes.message_id)
             await update.message.reply_text(f"😔 Книга с ID {book_id} не найдена.")
             return
         
-        await context.bot.deleteMessage(chat_id=mes.chat_id, message_id=mes.message_id)
+        await context.bot.delete_message(chat_id=mes.chat_id, message_id=mes.message_id)
         
-        # Создаем временный контекст для показа деталей
-        temp_update = update
-        temp_update.callback_query = None  # Очищаем callback_query чтобы отправить новое сообщение
-        await show_book_details_with_favorite(book_id, temp_update, context)
+        # Показываем детали книги
+        await show_book_details_with_favorite(book_id, update, context)
         
     except Exception as e:
         await handle_error(e, update, context, mes)
@@ -520,7 +519,7 @@ async def find_the_book(update: Update, context: CallbackContext) -> None:
             db.add_search_history(user_id, "exact", f"{title} | {author}", len(books) if books else 0)
             
             if not books:
-                await context.bot.deleteMessage(chat_id=mes.chat_id, message_id=mes.message_id)
+                await context.bot.delete_message(chat_id=mes.chat_id, message_id=mes.message_id)
                 await update.message.reply_text(
                     f"😔 Книга «{title}» автора «{author}» не найдена.\n"
                     "Попробуйте использовать команды /title или /author для более широкого поиска."
@@ -559,7 +558,7 @@ async def find_the_book(update: Update, context: CallbackContext) -> None:
             db.add_search_history(user_id, "title", search_string, len(books) if books else 0)
             
             if not books:
-                await context.bot.deleteMessage(chat_id=mes.chat_id, message_id=mes.message_id)
+                await context.bot.delete_message(chat_id=mes.chat_id, message_id=mes.message_id)
                 
                 # Предлагаем альтернативы
                 await update.message.reply_text(
@@ -585,14 +584,29 @@ async def find_the_book(update: Update, context: CallbackContext) -> None:
 
 async def handle_error(error, update: Update, context: CallbackContext, mes):
     """Обработка ошибок"""
-    await context.bot.deleteMessage(chat_id=mes.chat_id, message_id=mes.message_id)
-    await update.message.reply_text(
-        "❌ Произошла ошибка при выполнении запроса.\n"
-        "Попробуйте позже или используйте другую команду."
+    try:
+        await context.bot.delete_message(chat_id=mes.chat_id, message_id=mes.message_id)
+    except Exception:
+        pass  # Игнорируем ошибки при удалении сообщения
+    
+    try:
+        await update.message.reply_text(
+            "❌ Произошла ошибка при выполнении запроса.\n"
+            "Попробуйте позже или используйте другую команду."
+        )
+    except Exception:
+        pass  # Игнорируем ошибки при отправке сообщения
+    
+    # Правильное логирование исключений
+    logger.error(
+        "Error occurred",
+        exc_info=error,
+        extra={
+            "user_id": str(update.effective_user.id) if update.effective_user else None,
+            "error_type": type(error).__name__,
+            "error_message": str(error)
+        }
     )
-    logger.error(f"Error occurred: {error}", extra={"exc": error})
-    print("Traceback full:")
-    print(traceback.format_exc())
 
 async def show_books_page(books, update: Update, context: CallbackContext, mes, page: int = 1):
     """Отображение страницы с результатами поиска"""
@@ -670,7 +684,7 @@ async def show_books_page(books, update: Update, context: CallbackContext, mes, 
     
     # Обновляем или отправляем сообщение
     if mes:
-        await context.bot.deleteMessage(chat_id=mes.chat_id, message_id=mes.message_id)
+        await context.bot.delete_message(chat_id=mes.chat_id, message_id=mes.message_id)
         await update.message.reply_text(
             header_text,
             parse_mode=ParseMode.MARKDOWN,
@@ -708,10 +722,11 @@ async def show_book_details_with_favorite(book_id: str, update: Update, context:
             db.cache_book(book)
     
     if not book:
+        error_msg = "Книга не найдена"
         if update.callback_query:
-            await update.callback_query.answer("Книга не найдена", show_alert=True)
-        else:
-            await update.message.reply_text("Книга не найдена")
+            await update.callback_query.answer(error_msg, show_alert=True)
+        elif update.message:
+            await update.message.reply_text(error_msg)
         return
     
     # Проверяем, есть ли в избранном
@@ -741,7 +756,9 @@ async def show_book_details_with_favorite(book_id: str, update: Update, context:
     # Кнопки форматов
     for b_format in book.formats:
         text = f"📥 Скачать {b_format}"
-        callback_data = f"get_book_by_format {book_id}+{b_format}"
+        # Используем base64 для безопасной передачи формата (может содержать спецсимволы)
+        format_encoded = base64.b64encode(b_format.encode('utf-8')).decode('ascii')
+        callback_data = f"get_book_by_format_{book_id}_{format_encoded}"
         kb.append([InlineKeyboardButton(text, callback_data=callback_data)])
     
     # Кнопка назад
@@ -753,55 +770,48 @@ async def show_book_details_with_favorite(book_id: str, update: Update, context:
     if book.cover:
         try:
             flib.download_book_cover(book)
-            c_full_path = os.path.join(os.getcwd(), "books", book_id, "cover.jpg")
+            # Используем абсолютный путь для надежности
+            books_dir = os.path.join(os.getcwd(), "books")
+            c_full_path = os.path.join(books_dir, book_id, "cover.jpg")
+            if not os.path.exists(c_full_path):
+                raise FileNotFoundError("Cover not found")
             with open(c_full_path, "rb") as cover:
-                if update.callback_query:
-                    await context.bot.send_photo(
-                        chat_id=update.effective_chat.id,
-                        photo=cover,
-                        caption=capt,
-                        reply_markup=reply_markup,
-                        parse_mode=ParseMode.MARKDOWN
-                    )
-                    await update.callback_query.delete_message()
-                else:
-                    await context.bot.send_photo(
-                        chat_id=update.effective_chat.id,
-                        photo=cover,
-                        caption=capt,
-                        reply_markup=reply_markup,
-                        parse_mode=ParseMode.MARKDOWN
-                    )
-        except Exception:
-            text = "[обложка недоступна]\n\n" + capt
-            if update.callback_query:
-                await update.callback_query.edit_message_text(
-                    text, 
-                    reply_markup=reply_markup,
-                    parse_mode=ParseMode.MARKDOWN
-                )
-            else:
-                await context.bot.send_message(
+                # Отправляем фото (одинаково для callback и message)
+                await context.bot.send_photo(
                     chat_id=update.effective_chat.id,
-                    text=text,
+                    photo=cover,
+                    caption=capt,
                     reply_markup=reply_markup,
                     parse_mode=ParseMode.MARKDOWN
                 )
+                # Удаляем предыдущее сообщение если это callback
+                if update.callback_query:
+                    await update.callback_query.delete_message()
+        except Exception:
+            # Если не удалось отправить фото, отправляем текст
+            text = "[обложка недоступна]\n\n" + capt
+            await _send_or_edit_message(update, context, text, reply_markup)
     else:
+        # Нет обложки, отправляем текст
         text = "[обложки нет]\n\n" + capt
-        if update.callback_query:
-            await update.callback_query.edit_message_text(
-                text,
-                reply_markup=reply_markup,
-                parse_mode=ParseMode.MARKDOWN
-            )
-        else:
-            await context.bot.send_message(
-                chat_id=update.effective_chat.id,
-                text=text,
-                reply_markup=reply_markup,
-                parse_mode=ParseMode.MARKDOWN
-            )
+        await _send_or_edit_message(update, context, text, reply_markup)
+
+
+async def _send_or_edit_message(update: Update, context: CallbackContext, text: str, reply_markup):
+    """Вспомогательная функция для отправки или редактирования сообщения"""
+    if update.callback_query:
+        await update.callback_query.edit_message_text(
+            text,
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.MARKDOWN
+        )
+    else:
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text=text,
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.MARKDOWN
+        )
 
 
 @check_access
@@ -905,10 +915,9 @@ async def toggle_favorite(book_id: str, update: Update, context: CallbackContext
     await show_book_details_with_favorite(book_id, update, context)
 
 
-async def get_book_by_format(data: str, update: Update, context: CallbackContext):
+async def get_book_by_format(book_id: str, book_format: str, update: Update, context: CallbackContext):
     """Скачивание книги в выбранном формате"""
     user_id = str(update.effective_user.id)
-    book_id, book_format = data.split("+")
     
     logger.info(
         msg="get book by format",
@@ -916,36 +925,58 @@ async def get_book_by_format(data: str, update: Update, context: CallbackContext
             "command": "get_book_by_format",
             "user_id": user_id,
             "user_name": update.effective_user.name,
-            "data": data,
+            "book_id": book_id,
+            "format": book_format,
         }
     )
     
-    await update.callback_query.answer("⏳ Начинаю скачивание...")
+    if update.callback_query:
+        await update.callback_query.answer("⏳ Начинаю скачивание...")
     
     mes = await context.bot.send_message(
         chat_id=update.effective_chat.id, 
         text="⏳ Подождите, скачиваю книгу..."
     )
     
-    book = flib.get_book_by_id(book_id)
-    b_content, b_filename = flib.download_book(book, book_format)
-    
-    if b_filename:
-        # Записываем в БД
-        db.add_download(user_id, book_id, book.title, book.author, book_format)
+    try:
+        book = flib.get_book_by_id(book_id)
+        if not book:
+            await context.bot.delete_message(chat_id=mes.chat_id, message_id=mes.message_id)
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text="❌ Книга не найдена."
+            )
+            return
         
-        await context.bot.send_document(
-            chat_id=update.effective_chat.id, 
-            document=b_content, 
-            filename=b_filename,
-            caption=f"✅ Книга успешно загружена!\n📖 {book.title}\n✍️ {book.author}"
+        b_content, b_filename = flib.download_book(book, book_format)
+        
+        if b_content and b_filename:
+            # Записываем в БД
+            db.add_download(user_id, book_id, book.title, book.author, book_format)
+            
+            await context.bot.send_document(
+                chat_id=update.effective_chat.id, 
+                document=b_content, 
+                filename=b_filename,
+                caption=f"✅ Книга успешно загружена!\n📖 {book.title}\n✍️ {book.author}"
+            )
+            await context.bot.delete_message(chat_id=mes.chat_id, message_id=mes.message_id)
+        else:
+            await context.bot.delete_message(chat_id=mes.chat_id, message_id=mes.message_id)
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text="❌ Произошла ошибка при скачивании книги.\nПопробуйте другой формат."
+            )
+    except Exception as e:
+        await context.bot.delete_message(chat_id=mes.chat_id, message_id=mes.message_id)
+        logger.error(
+            "Error downloading book",
+            exc_info=e,
+            extra={"user_id": user_id, "book_id": book_id, "format": book_format}
         )
-        await context.bot.deleteMessage(chat_id=mes.chat_id, message_id=mes.message_id)
-    else:
-        await context.bot.deleteMessage(chat_id=mes.chat_id, message_id=mes.message_id)
         await context.bot.send_message(
             chat_id=update.effective_chat.id,
-            text="❌ Произошла ошибка при скачивании книги.\nПопробуйте другой формат."
+            text="❌ Произошла ошибка при скачивании книги.\nПопробуйте позже."
         )
 
 
@@ -957,6 +988,11 @@ async def button(update: Update, context: CallbackContext) -> None:
     
     data = query.data
     user_id = str(update.effective_user.id)
+    
+    # Обработка нажатия на текущую страницу (ничего не делаем)
+    if data == "current_page":
+        await query.answer("Вы на этой странице")
+        return
     
     # Навигация по страницам
     if data.startswith("page_"):
@@ -1019,13 +1055,58 @@ async def button(update: Update, context: CallbackContext) -> None:
             await show_books_page(books, update, context, None, 1)
         return
     
-    # Обработка старых callback'ов
+    # Обработка скачивания книги по формату
+    if data.startswith("get_book_by_format_"):
+        parts = data.split("_", 4)  # get_book_by_format_{book_id}_{format_encoded}
+        if len(parts) >= 5:
+            book_id = parts[3]
+            format_encoded = parts[4]
+            try:
+                book_format = base64.b64decode(format_encoded.encode('ascii')).decode('utf-8')
+                await get_book_by_format(book_id, book_format, update, context)
+            except Exception as e:
+                logger.error(f"Error decoding format: {e}", exc_info=e)
+                await query.answer("Ошибка при обработке формата", show_alert=True)
+        return
+    
+    # Обработка настроек
+    if data.startswith("set_per_page_"):
+        try:
+            count = int(data.split("_")[3])
+            if count in [5, 10, 20]:
+                user_id = str(update.effective_user.id)
+                db.set_user_preference(user_id, 'books_per_page', count)
+                global BOOKS_PER_PAGE
+                BOOKS_PER_PAGE = count
+                await query.answer(f"✅ Установлено {count} книг на странице", show_alert=False)
+                await show_user_settings(update, context)
+        except (ValueError, IndexError):
+            await query.answer("Ошибка при установке настройки", show_alert=True)
+        return
+    
+    if data.startswith("set_format_"):
+        try:
+            format_type = data.split("_")[2].lower()
+            if format_type in ['fb2', 'epub', 'mobi', 'pdf', 'djvu']:
+                user_id = str(update.effective_user.id)
+                db.set_user_preference(user_id, 'default_format', format_type)
+                await query.answer(f"✅ Установлен формат: {format_type.upper()}", show_alert=False)
+                await show_user_settings(update, context)
+        except (ValueError, IndexError):
+            await query.answer("Ошибка при установке формата", show_alert=True)
+        return
+    
+    # Обработка старых callback'ов для обратной совместимости
     if " " in data:
         command, arg = data.split(" ", maxsplit=1)
         if command == "find_book_by_id":
             await show_book_details_with_favorite(arg, update, context)
         elif command == "get_book_by_format":
-            await get_book_by_format(data=arg, update=update, context=context)
+            # Старый формат: "get_book_by_format book_id+format"
+            if "+" in arg:
+                book_id, book_format = arg.split("+", maxsplit=1)
+                await get_book_by_format(book_id, book_format, update, context)
+            return
 
 async def show_main_menu(update: Update, context: CallbackContext):
     """Показать главное меню"""
