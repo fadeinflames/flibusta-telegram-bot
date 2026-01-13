@@ -242,6 +242,7 @@ async def search_by_title(update: Update, context: CallbackContext) -> None:
         context.user_data['search_results'] = books
         context.user_data['search_type'] = 'title'
         context.user_data['search_query'] = title
+        context.user_data['current_results_page'] = 1
         
         await show_books_page(books, update, context, mes, page=1)
         
@@ -326,6 +327,7 @@ async def search_by_author(update: Update, context: CallbackContext) -> None:
         context.user_data['search_results'] = books_list
         context.user_data['search_type'] = 'author'
         context.user_data['search_query'] = author
+        context.user_data['current_results_page'] = 1
         
         await show_books_page(books_list, update, context, mes, page=1)
         
@@ -390,6 +392,7 @@ async def search_exact(update: Update, context: CallbackContext) -> None:
         context.user_data['search_results'] = books
         context.user_data['search_type'] = 'точному поиску'
         context.user_data['search_query'] = f"{title} | {author}"
+        context.user_data['current_results_page'] = 1
         
         await show_books_page(books, update, context, mes, page=1)
         
@@ -530,6 +533,7 @@ async def find_the_book(update: Update, context: CallbackContext) -> None:
             context.user_data['search_results'] = books
             context.user_data['search_type'] = 'точному поиску'
             context.user_data['search_query'] = f"{title} | {author}"
+            context.user_data['current_results_page'] = 1
             
             await show_books_page(books, update, context, mes, page=1)
             
@@ -576,6 +580,7 @@ async def find_the_book(update: Update, context: CallbackContext) -> None:
             context.user_data['search_results'] = books
             context.user_data['search_type'] = 'названию'
             context.user_data['search_query'] = search_string
+            context.user_data['current_results_page'] = 1
             
             await show_books_page(books, update, context, mes, page=1)
             
@@ -618,6 +623,9 @@ async def show_books_page(books, update: Update, context: CallbackContext, mes, 
         page = 1
     elif page > total_pages:
         page = total_pages
+    
+    # Сохраняем текущую страницу в контексте
+    context.user_data['current_results_page'] = page
     
     # Вычисляем индексы для текущей страницы
     start_idx = (page - 1) * BOOKS_PER_PAGE
@@ -996,15 +1004,25 @@ async def button(update: Update, context: CallbackContext) -> None:
     
     # Навигация по страницам
     if data.startswith("page_"):
-        page = int(data.split("_")[1])
-        books = context.user_data.get('search_results', [])
-        if books:
-            await show_books_page(books, update, context, None, page)
+        try:
+            page = int(data.split("_")[1])
+            books = context.user_data.get('search_results', [])
+            if books:
+                await show_books_page(books, update, context, None, page)
+            else:
+                await query.answer("Результаты поиска не найдены", show_alert=True)
+        except (ValueError, IndexError):
+            await query.answer("Ошибка при переходе на страницу", show_alert=True)
         return
     
     # Просмотр книги
     if data.startswith("book_"):
         book_id = data.split("_")[1]
+        # Сохраняем текущую страницу результатов для кнопки "Назад"
+        # Используем текущую страницу или последнюю сохраненную, или 1 по умолчанию
+        current_page = context.user_data.get('current_results_page', 
+                                             context.user_data.get('last_results_page', 1))
+        context.user_data['last_results_page'] = current_page
         await show_book_details_with_favorite(book_id, update, context)
         return
     
@@ -1052,7 +1070,11 @@ async def button(update: Update, context: CallbackContext) -> None:
     if data == "back_to_results":
         books = context.user_data.get('search_results', [])
         if books:
-            await show_books_page(books, update, context, None, 1)
+            # Восстанавливаем последнюю страницу результатов или используем страницу 1
+            last_page = context.user_data.get('last_results_page', 1)
+            await show_books_page(books, update, context, None, last_page)
+        else:
+            await query.answer("Результаты поиска не найдены", show_alert=True)
         return
     
     # Обработка скачивания книги по формату
