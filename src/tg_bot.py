@@ -1,5 +1,6 @@
 import os
 import traceback
+import time
 from urllib.error import HTTPError
 from urllib.parse import quote, unquote
 from functools import wraps
@@ -10,22 +11,31 @@ from collections import defaultdict
 import math
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import InlineQueryResultArticle, InputTextMessageContent
 from telegram.ext import CallbackContext, ConversationHandler
 from telegram.constants import ParseMode
 
 from src import flib
 from src import database as db
+from src import config
 from src.custom_logging import get_logger
 
 logger = get_logger(__name__)
+
+# In-memory search cache: key -> (timestamp, value)
+_SEARCH_CACHE: "dict[str, tuple[float, object]]" = {}
+
+# Навигационный стек
+_NAV_STACK_KEY = "nav_stack"
+_MAX_NAV_STACK = 10
 
 # Получаем список разрешенных пользователей из переменной окружения
 ALLOWED_USERS = os.getenv('ALLOWED_USERS', '').split(',')
 ALLOWED_USERS = [user_id.strip() for user_id in ALLOWED_USERS if user_id.strip()]
 
 # Константы для пагинации
-BOOKS_PER_PAGE = 10
-FAVORITES_PER_PAGE = 10
+BOOKS_PER_PAGE = config.BOOKS_PER_PAGE_DEFAULT
+FAVORITES_PER_PAGE = config.FAVORITES_PER_PAGE_DEFAULT
 
 # Состояния для ConversationHandler
 class SearchState(Enum):
@@ -69,6 +79,85 @@ def check_access(func):
         return await func(update, context)
     
     return wrapper
+
+
+def rate_limit(min_interval_sec: float = 1.0):
+    """Простой rate-limit на пользователя."""
+    def decorator(func):
+        @wraps(func)
+        async def wrapper(update: Update, context: CallbackContext, *args, **kwargs):
+            user_id = str(update.effective_user.id)
+            last_key = f"last_request_{func.__name__}"
+            last_time = context.user_data.get(last_key, 0)
+            now = time.time()
+            if now - last_time < min_interval_sec:
+                await update.message.reply_text("⏳ Слишком часто. Подождите пару секунд.")
+                return
+            context.user_data[last_key] = now
+            return await func(update, context, *args, **kwargs)
+        return wrapper
+    return decorator
+
+
+def _cache_get(key: str):
+    item = _SEARCH_CACHE.get(key)
+    if not item:
+        return None
+    ts, value = item
+    if time.time() - ts > config.SEARCH_CACHE_TTL_SEC:
+        _SEARCH_CACHE.pop(key, None)
+        return None
+    return value
+
+
+def _cache_set(key: str, value):
+    _SEARCH_CACHE[key] = (time.time(), value)
+    if len(_SEARCH_CACHE) > config.SEARCH_CACHE_MAX_SIZE:
+        # Drop oldest
+        oldest_key = sorted(_SEARCH_CACHE.items(), key=lambda x: x[1][0])[0][0]
+        _SEARCH_CACHE.pop(oldest_key, None)
+
+
+def _inc_error_stat(context: CallbackContext, error: Exception):
+    stats = context.bot_data.setdefault("error_stats", {})
+    name = type(error).__name__
+    stats[name] = stats.get(name, 0) + 1
+
+
+def _push_nav(context: CallbackContext, entry: dict):
+    stack = context.user_data.setdefault(_NAV_STACK_KEY, [])
+    if stack and stack[-1] == entry:
+        return
+    stack.append(entry)
+    if len(stack) > _MAX_NAV_STACK:
+        stack.pop(0)
+
+
+def _pop_nav(context: CallbackContext):
+    stack = context.user_data.get(_NAV_STACK_KEY, [])
+    return stack.pop() if stack else None
+
+
+async def _render_nav_entry(entry: dict, update: Update, context: CallbackContext):
+    view = entry.get("type")
+    if view == "results":
+        books = context.user_data.get("search_results", [])
+        if books:
+            await show_books_page(books, update, context, None, entry.get("page", 1))
+        else:
+            await update.callback_query.answer("Результаты поиска не найдены", show_alert=True)
+    elif view == "favorites":
+        await show_favorites(update, context)
+    elif view == "history":
+        await show_user_history(update, context)
+    elif view == "stats":
+        await show_user_statistics(update, context)
+    elif view == "settings":
+        await show_user_settings(update, context)
+    elif view == "search_menu":
+        await show_search_menu(update, context)
+    else:
+        await show_main_menu(update, context)
 
 
 def check_callback_access(func):
@@ -199,6 +288,7 @@ async def help_command(update: Update, context: CallbackContext):
     await show_main_menu_text(update, context, is_start=False)
 
 @check_access
+@rate_limit(1.0)
 async def search_by_title(update: Update, context: CallbackContext) -> None:
     """Поиск только по названию книги"""
     if not context.args:
@@ -225,7 +315,11 @@ async def search_by_title(update: Update, context: CallbackContext) -> None:
     mes = await update.message.reply_text("🔍 Ищу книги по названию...")
     
     try:
-        books = flib.scrape_books_by_title(title)
+        cache_key = f"title:{title}"
+        books = _cache_get(cache_key)
+        if books is None:
+            books = flib.scrape_books_by_title(title)
+            _cache_set(cache_key, books)
         
         # Записываем в историю поиска
         db.add_search_history(user_id, "title", title, len(books) if books else 0)
@@ -252,6 +346,7 @@ async def search_by_title(update: Update, context: CallbackContext) -> None:
 # Замените функцию search_by_author в tg_bot.py на эту исправленную версию:
 
 @check_access
+@rate_limit(1.0)
 async def search_by_author(update: Update, context: CallbackContext) -> None:
     """Поиск всех книг конкретного автора"""
     if not context.args:
@@ -278,7 +373,11 @@ async def search_by_author(update: Update, context: CallbackContext) -> None:
     mes = await update.message.reply_text("🔍 Ищу книги автора...")
     
     try:
-        authors_books = flib.scrape_books_by_author(author)
+        cache_key = f"author:{author}"
+        authors_books = _cache_get(cache_key)
+        if authors_books is None:
+            authors_books = flib.scrape_books_by_author(author)
+            _cache_set(cache_key, authors_books)
         
         # ИСПРАВЛЕНО: проверяем правильно
         if not authors_books or len(authors_books) == 0:
@@ -336,6 +435,7 @@ async def search_by_author(update: Update, context: CallbackContext) -> None:
         await handle_error(e, update, context, mes)
 
 @check_access
+@rate_limit(1.0)
 async def search_exact(update: Update, context: CallbackContext) -> None:
     """Точный поиск книги по названию и автору"""
     if not context.args:
@@ -375,7 +475,11 @@ async def search_exact(update: Update, context: CallbackContext) -> None:
     mes = await update.message.reply_text("🔍 Выполняю точный поиск...")
     
     try:
-        books = flib.scrape_books_mbl(title, author)
+        cache_key = f"exact:{title}|{author}"
+        books = _cache_get(cache_key)
+        if books is None:
+            books = flib.scrape_books_mbl(title, author)
+            _cache_set(cache_key, books)
         
         # Записываем в историю
         db.add_search_history(user_id, "exact", f"{title} | {author}", len(books) if books else 0)
@@ -401,6 +505,7 @@ async def search_exact(update: Update, context: CallbackContext) -> None:
 
 
 @check_access
+@rate_limit(1.0)
 async def search_by_id(update: Update, context: CallbackContext) -> None:
     """Получить книгу по ID"""
     if not context.args:
@@ -487,6 +592,7 @@ async def universal_search(update: Update, _: CallbackContext):
     )
 
 @check_access
+@rate_limit(1.0)
 async def find_the_book(update: Update, context: CallbackContext) -> None:
     """Обработка текстовых сообщений - интерпретируем как поиск по названию"""
     # Проверяем, не является ли это командой
@@ -516,7 +622,11 @@ async def find_the_book(update: Update, context: CallbackContext) -> None:
         mes = await update.message.reply_text("🔍 Ищу книгу по названию и автору...")
         
         try:
-            books = flib.scrape_books_mbl(title, author)
+            cache_key = f"exact:{title}|{author}"
+            books = _cache_get(cache_key)
+            if books is None:
+                books = flib.scrape_books_mbl(title, author)
+                _cache_set(cache_key, books)
             
             # Записываем в историю
             db.add_search_history(user_id, "exact", f"{title} | {author}", len(books) if books else 0)
@@ -556,7 +666,11 @@ async def find_the_book(update: Update, context: CallbackContext) -> None:
         mes = await update.message.reply_text("🔍 Ищу книги по названию...")
         
         try:
-            books = flib.scrape_books_by_title(search_string)
+            cache_key = f"title:{search_string}"
+            books = _cache_get(cache_key)
+            if books is None:
+                books = flib.scrape_books_by_title(search_string)
+                _cache_set(cache_key, books)
             
             # Записываем в историю поиска
             db.add_search_history(user_id, "title", search_string, len(books) if books else 0)
@@ -603,6 +717,7 @@ async def handle_error(error, update: Update, context: CallbackContext, mes):
         pass  # Игнорируем ошибки при отправке сообщения
     
     # Правильное логирование исключений
+    _inc_error_stat(context, error)
     logger.error(
         "Error occurred",
         exc_info=error,
@@ -615,8 +730,10 @@ async def handle_error(error, update: Update, context: CallbackContext, mes):
 
 async def show_books_page(books, update: Update, context: CallbackContext, mes, page: int = 1):
     """Отображение страницы с результатами поиска"""
+    user_id = str(update.effective_user.id)
+    per_page = db.get_user_preference(user_id, 'books_per_page', BOOKS_PER_PAGE)
     total_books = len(books)
-    total_pages = math.ceil(total_books / BOOKS_PER_PAGE)
+    total_pages = math.ceil(total_books / per_page) if per_page else 1
     
     # Проверяем корректность страницы
     if page < 1:
@@ -628,8 +745,8 @@ async def show_books_page(books, update: Update, context: CallbackContext, mes, 
     context.user_data['current_results_page'] = page
     
     # Вычисляем индексы для текущей страницы
-    start_idx = (page - 1) * BOOKS_PER_PAGE
-    end_idx = min(start_idx + BOOKS_PER_PAGE, total_books)
+    start_idx = (page - 1) * per_page
+    end_idx = min(start_idx + per_page, total_books)
     page_books = books[start_idx:end_idx]
     
     # Формируем заголовок
@@ -645,8 +762,6 @@ async def show_books_page(books, update: Update, context: CallbackContext, mes, 
     
     # Создаем кнопки для книг
     kb = []
-    user_id = str(update.effective_user.id)
-    
     for i, book in enumerate(page_books, start=start_idx + 1):
         # Проверяем, есть ли книга в избранном
         is_fav = db.is_favorite(user_id, book.id)
@@ -779,9 +894,7 @@ async def show_book_details_with_favorite(book_id: str, update: Update, context:
     # Кнопки форматов
     for b_format in book.formats:
         text = f"📥 Скачать {b_format}"
-        # Используем URL-кодирование для безопасной передачи формата (может содержать спецсимволы)
-        # Используем разделитель | который точно не будет в формате
-        format_encoded = quote(b_format, safe='')
+        format_encoded = quote(b_format, safe="")
         callback_data = f"get_book_by_format_{book_id}|{format_encoded}"
         kb.append([InlineKeyboardButton(text, callback_data=callback_data)])
     
@@ -794,9 +907,7 @@ async def show_book_details_with_favorite(book_id: str, update: Update, context:
     if book.cover:
         try:
             flib.download_book_cover(book)
-            # Используем абсолютный путь для надежности
-            books_dir = os.path.join(os.getcwd(), "books")
-            c_full_path = os.path.join(books_dir, book_id, "cover.jpg")
+            c_full_path = os.path.join(config.BOOKS_DIR, book_id, "cover.jpg")
             if not os.path.exists(c_full_path):
                 raise FileNotFoundError("Cover not found")
             with open(c_full_path, "rb") as cover:
@@ -853,6 +964,7 @@ async def show_favorites(update: Update, context: CallbackContext):
     # Получаем избранное с пагинацией
     offset = (page - 1) * FAVORITES_PER_PAGE
     favorites, total = db.get_user_favorites(user_id, offset, FAVORITES_PER_PAGE)
+    context.user_data['current_favorites_page'] = page
     
     if not favorites:
         text = "⭐ *Избранное*\n\nУ вас пока нет избранных книг.\n\nДобавляйте книги в избранное для быстрого доступа!"
@@ -1034,21 +1146,21 @@ async def button(update: Update, context: CallbackContext) -> None:
     # Просмотр книги
     if data.startswith("book_"):
         book_id = data.split("_")[1]
-        # Сохраняем текущую страницу результатов для кнопки "Назад"
-        # Используем текущую страницу или последнюю сохраненную, или 1 по умолчанию
-        current_page = context.user_data.get('current_results_page', 
-                                             context.user_data.get('last_results_page', 1))
-        context.user_data['last_results_page'] = current_page
+        current_page = context.user_data.get('current_results_page', 1)
+        _push_nav(context, {"type": "results", "page": current_page})
         await show_book_details_with_favorite(book_id, update, context)
         return
     
     # Избранное
     if data.startswith("show_favorites_"):
+        _push_nav(context, {"type": "main_menu"})
         await show_favorites(update, context)
         return
     
     if data.startswith("fav_book_"):
         book_id = data.split("_")[2]
+        fav_page = context.user_data.get('current_favorites_page', 1)
+        _push_nav(context, {"type": "favorites", "page": fav_page})
         await show_book_details_with_favorite(book_id, update, context)
         return
     
@@ -1064,33 +1176,43 @@ async def button(update: Update, context: CallbackContext) -> None:
     
     # Меню поиска
     if data == "menu_search":
+        _push_nav(context, {"type": "main_menu"})
         await show_search_menu(update, context)
         return
     
     # История
     if data == "show_history":
+        _push_nav(context, {"type": "main_menu"})
         await show_user_history(update, context)
         return
     
     # Статистика
     if data == "show_my_stats":
+        _push_nav(context, {"type": "main_menu"})
         await show_user_statistics(update, context)
         return
     
     # Настройки
     if data == "show_settings":
+        _push_nav(context, {"type": "main_menu"})
         await show_user_settings(update, context)
         return
     
     # Назад к результатам
     if data == "back_to_results":
-        books = context.user_data.get('search_results', [])
-        if books:
-            # Восстанавливаем последнюю страницу результатов или используем страницу 1
-            last_page = context.user_data.get('last_results_page', 1)
-            await show_books_page(books, update, context, None, last_page)
+        prev = _pop_nav(context)
+        if prev:
+            await _render_nav_entry(prev, update, context)
         else:
-            await query.answer("Результаты поиска не найдены", show_alert=True)
+            await show_main_menu(update, context)
+        return
+
+    if data == "nav_back":
+        prev = _pop_nav(context)
+        if prev:
+            await _render_nav_entry(prev, update, context)
+        else:
+            await show_main_menu(update, context)
         return
     
     # Обработка скачивания книги по формату
@@ -1164,6 +1286,7 @@ async def show_main_menu(update: Update, context: CallbackContext):
     """Показать главное меню"""
     user_name = update.effective_user.first_name or "Книголюб"
     user_id = str(update.effective_user.id)
+    context.user_data[_NAV_STACK_KEY] = []
     
     # Получаем статистику
     user_stats = db.get_user_stats(user_id)
@@ -1227,7 +1350,10 @@ async def show_search_menu(update: Update, context: CallbackContext):
     """
     
     keyboard = [
-        [InlineKeyboardButton("◀️ Назад", callback_data="main_menu")]
+        [
+            InlineKeyboardButton("◀️ Назад", callback_data="nav_back"),
+            InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu")
+        ]
     ]
     
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -1257,7 +1383,12 @@ async def show_user_history(update: Update, context: CallbackContext):
             text += f"🕐 {timestamp}\n"
             text += f"   /{command}: «{query}» ({results} рез.)\n\n"
     
-    keyboard = [[InlineKeyboardButton("◀️ Назад", callback_data="main_menu")]]
+    keyboard = [
+        [
+            InlineKeyboardButton("◀️ Назад", callback_data="nav_back"),
+            InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu")
+        ]
+    ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await update.callback_query.edit_message_text(
@@ -1296,7 +1427,12 @@ async def show_user_statistics(update: Update, context: CallbackContext):
     else:
         text += "Пока нет данных\n"
     
-    keyboard = [[InlineKeyboardButton("◀️ Назад", callback_data="main_menu")]]
+    keyboard = [
+        [
+            InlineKeyboardButton("◀️ Назад", callback_data="nav_back"),
+            InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu")
+        ]
+    ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await update.callback_query.edit_message_text(
@@ -1334,7 +1470,10 @@ _Настройки сохраняются автоматически_
             InlineKeyboardButton("EPUB", callback_data="set_format_epub"),
             InlineKeyboardButton("MOBI", callback_data="set_format_mobi")
         ],
-        [InlineKeyboardButton("◀️ Назад", callback_data="main_menu")]
+        [
+            InlineKeyboardButton("◀️ Назад", callback_data="nav_back"),
+            InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu")
+        ]
     ]
     
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -1605,4 +1744,47 @@ async def list_allowed_users(update: Update, _: CallbackContext) -> None:
 async def cleanup_job(context: CallbackContext):
     """Задача для очистки старых данных"""
     db.cleanup_old_data(days=30)
+    flib.cleanup_old_files(days=30)
     logger.info("Database cleanup completed")
+
+
+async def app_error_handler(update: object, context: CallbackContext) -> None:
+    """Глобальный обработчик ошибок для PTB."""
+    if context.error:
+        _inc_error_stat(context, context.error)
+    logger.error("Unhandled exception", exc_info=context.error)
+    if isinstance(update, Update) and update.effective_message:
+        try:
+            await update.effective_message.reply_text(
+                "⚠️ Произошла ошибка. Попробуйте позже."
+            )
+        except Exception:
+            pass
+
+
+@check_access
+async def inline_query(update: Update, context: CallbackContext) -> None:
+    """Inline mode: быстрый поиск по названию."""
+    query = update.inline_query.query.strip()
+    if not query or len(query) < 3:
+        return
+
+    cache_key = f"inline:{query}"
+    books = _cache_get(cache_key)
+    if books is None:
+        books = flib.scrape_books_by_title(query) or []
+        _cache_set(cache_key, books)
+
+    results = []
+    for book in books[:5]:
+        results.append(
+            InlineQueryResultArticle(
+                id=str(book.id),
+                title=f"{book.title} — {book.author}",
+                description=book.link,
+                input_message_content=InputTextMessageContent(
+                    f"📖 {book.title}\n✍️ {book.author}\n🔗 {book.link}"
+                ),
+            )
+        )
+    await update.inline_query.answer(results, cache_time=10)

@@ -5,13 +5,16 @@ from typing import List, Dict, Optional, Tuple
 from contextlib import contextmanager
 import os
 
+from src import config
+
 # Путь к базе данных
-DB_PATH = os.path.join(os.getcwd(), 'flibusta_bot.db')
+DB_PATH = config.DB_PATH
 
 
 @contextmanager
 def get_db():
     """Контекстный менеджер для работы с БД"""
+    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row  # Для получения результатов как словарей
     try:

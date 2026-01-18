@@ -1,25 +1,32 @@
-import requests
-from bs4 import BeautifulSoup
-import urllib.request
-import urllib.parse
 import os
 import re
+import time
+import urllib.parse
+from collections import OrderedDict
+from dataclasses import dataclass, field
 
-ALL_FORMATS = ['fb2', 'epub', 'mobi', 'pdf', 'djvu']
-SITE = 'http://flibusta.is'
+import requests
+from bs4 import BeautifulSoup
+
+from src import config
+
+SESSION = requests.Session()
+SESSION.headers.update({"User-Agent": config.USER_AGENT})
+
+_PAGE_CACHE: "OrderedDict[str, tuple[float, BeautifulSoup]]" = OrderedDict()
 
 
+@dataclass
 class Book:
-    def __init__(self, book_id):
-        self.id = book_id
-        self.title = ''
-        self.author = ''
-        self.link = ''
-        self.formats = {}
-        self.cover = ''
-        self.size = ''
-        self.series = ''  # Добавлено
-        self.year = ''    # Добавлено
+    id: str
+    title: str = ""
+    author: str = ""
+    link: str = ""
+    formats: dict = field(default_factory=dict)
+    cover: str = ""
+    size: str = ""
+    series: str = ""
+    year: str = ""
 
     def __str__(self):
         return f'{self.title} - {self.author} ({self.id})'
@@ -27,21 +34,32 @@ class Book:
 def get_page(url):
     """Получение страницы"""
     try:
-        # Используем requests для единообразия и лучшей обработки ошибок
-        response = requests.get(url, timeout=30, headers={
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        })
+        now = time.time()
+        if url in _PAGE_CACHE:
+            cached_time, cached_soup = _PAGE_CACHE[url]
+            if now - cached_time < config.PAGE_CACHE_TTL_SEC:
+                _PAGE_CACHE.move_to_end(url)
+                return cached_soup
+            _PAGE_CACHE.pop(url, None)
+
+        response = SESSION.get(url, timeout=config.REQUEST_TIMEOUT)
         response.raise_for_status()
         soup = BeautifulSoup(response.text, "html.parser")
+
+        _PAGE_CACHE[url] = (now, soup)
+        _PAGE_CACHE.move_to_end(url)
+        if len(_PAGE_CACHE) > config.PAGE_CACHE_MAX_SIZE:
+            _PAGE_CACHE.popitem(last=False)
+
         return soup
-    except (requests.exceptions.RequestException, Exception) as e:
+    except (requests.exceptions.RequestException, Exception):
         return None
 
 
 def scrape_books_by_title(text: str) -> list[Book] | None:
     """Поиск книг по названию"""
     query_text = urllib.parse.quote(text)
-    url = f"http://flibusta.is/booksearch?ask={query_text}&chb=on"
+    url = f"{config.SITE}/booksearch?ask={query_text}&chb=on"
 
     sp = get_page(url)
     if not sp:
@@ -86,7 +104,7 @@ def scrape_books_by_title(text: str) -> list[Book] | None:
             book_id = href.replace('/b/', '')
             book = Book(book_id)
             book.title = first_link.text.strip()
-            book.link = SITE + href + '/'
+            book.link = config.SITE + href + '/'
             
             # Собираем авторов (остальные ссылки)
             authors = []
@@ -104,7 +122,7 @@ def scrape_books_by_title(text: str) -> list[Book] | None:
 def scrape_books_by_author(text: str) -> list[list[Book]] | None:
     """Поиск книг по автору"""
     query_text = urllib.parse.quote(text)
-    url = f"http://flibusta.is/booksearch?ask={query_text}&cha=on"
+    url = f"{config.SITE}/booksearch?ask={query_text}&cha=on"
 
     sp = get_page(url)
     if not sp:
@@ -134,7 +152,7 @@ def scrape_books_by_author(text: str) -> list[list[Book]] | None:
             if author_link:
                 href = author_link.get('href', '')
                 if href.startswith('/a/'):
-                    authors_links.append(SITE + href + '/')
+                    authors_links.append(config.SITE + href + '/')
 
     if not authors_links:
         return None
@@ -181,7 +199,7 @@ def scrape_books_by_author(text: str) -> list[list[Book]] | None:
                     book = Book(book_id)
                     book.title = book_link.text.strip()
                     book.author = author
-                    book.link = SITE + href + '/'
+                    book.link = config.SITE + href + '/'
                     result.append(book)
         
         # Способ 2: через checkbox (старая разметка)
@@ -196,7 +214,7 @@ def scrape_books_by_author(text: str) -> list[list[Book]] | None:
                         book = Book(book_id)
                         book.title = book_link.text.strip()
                         book.author = author
-                        book.link = SITE + href + '/'
+                    book.link = config.SITE + href + '/'
                         result.append(book)
         
         # Способ 3: все ссылки на книги в форме
@@ -208,7 +226,7 @@ def scrape_books_by_author(text: str) -> list[list[Book]] | None:
                 book = Book(book_id)
                 book.title = book_link.text.strip()
                 book.author = author
-                book.link = SITE + href + '/'
+                    book.link = config.SITE + href + '/'
                 result.append(book)
         
         if result:
@@ -221,7 +239,7 @@ def scrape_books_mbl(title: str, author: str) -> list[Book] | None:
     """Точный поиск по названию и автору"""
     title_q = urllib.parse.quote(title)
     author_q = urllib.parse.quote(author)
-    url = f"http://flibusta.is/makebooklist?ab=ab1&t={title_q}&ln={author_q}&sort=sd2"
+    url = f"{config.SITE}/makebooklist?ab=ab1&t={title_q}&ln={author_q}&sort=sd2"
 
     sp = get_page(url)
     if not sp:
@@ -246,7 +264,7 @@ def scrape_books_mbl(title: str, author: str) -> list[Book] | None:
         
         book = Book(book_id)
         book.title = book_link.text.strip()
-        book.link = SITE + b_href + '/'
+        book.link = config.SITE + b_href + '/'
         
         # Ищем авторов
         author_links = d.find_all('a', href=re.compile(r'^/a/\d+$'))
@@ -265,7 +283,7 @@ def scrape_books_mbl(title: str, author: str) -> list[Book] | None:
 def get_book_by_id(book_id):
     """Получение книги по ID"""
     book = Book(book_id)
-    book.link = SITE + '/b/' + book_id + '/'
+    book.link = f"{config.SITE}/b/{book_id}/"
 
     sp = get_page(book.link)
     if not sp:
@@ -301,7 +319,7 @@ def get_book_by_id(book_id):
     if target_img:
         img_src = target_img.get('src')
         if img_src:
-            book.cover = SITE + img_src if not img_src.startswith('http') else img_src
+            book.cover = config.SITE + img_src if not img_src.startswith('http') else img_src
     
     # Форматы для скачивания
     format_links = target_div.find_all('a', string=re.compile(r'\(.*(?:fb2|epub|mobi|pdf|djvu)\)'))
@@ -309,7 +327,7 @@ def get_book_by_id(book_id):
         b_format = a.text.strip()
         link = a.get('href')
         if link:
-            book.formats[b_format] = SITE + link if not link.startswith('http') else link
+            book.formats[b_format] = config.SITE + link if not link.startswith('http') else link
 
     # Автор
     author_link = target_h1.find_next('a')
@@ -327,17 +345,10 @@ def download_book_cover(book: Book):
         return
         
     try:
-        c_response = requests.get(
-            book.cover, 
-            timeout=10,
-            headers={
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-            }
-        )
+        c_response = SESSION.get(book.cover, timeout=config.REQUEST_TIMEOUT)
         c_response.raise_for_status()
         
-        books_dir = os.path.join(os.getcwd(), "books")
-        cover_dir = os.path.join(books_dir, book.id)
+        cover_dir = os.path.join(config.BOOKS_DIR, book.id)
         os.makedirs(cover_dir, exist_ok=True)
         
         c_full_path = os.path.join(cover_dir, 'cover.jpg')
@@ -355,13 +366,7 @@ def download_book(book: Book, b_format: str):
     book_url = book.formats[b_format]
 
     try:
-        b_response = requests.get(
-            book_url, 
-            timeout=30,
-            headers={
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-            }
-        )
+        b_response = SESSION.get(book_url, timeout=config.REQUEST_TIMEOUT)
         
         b_response.raise_for_status()
 
@@ -397,3 +402,30 @@ def download_book(book: Book, b_format: str):
         return None, None
     except Exception:
         return None, None
+
+
+def cleanup_old_files(days: int = 30):
+    """Очистка старых файлов книг и обложек."""
+    if days <= 0:
+        return
+
+    cutoff = time.time() - (days * 24 * 60 * 60)
+    if not os.path.exists(config.BOOKS_DIR):
+        return
+
+    for book_dir in os.listdir(config.BOOKS_DIR):
+        full_path = os.path.join(config.BOOKS_DIR, book_dir)
+        try:
+            if os.path.isdir(full_path) and os.path.getmtime(full_path) < cutoff:
+                for root, _, files in os.walk(full_path, topdown=False):
+                    for name in files:
+                        try:
+                            os.remove(os.path.join(root, name))
+                        except Exception:
+                            pass
+                    try:
+                        os.rmdir(root)
+                    except Exception:
+                        pass
+        except Exception:
+            continue

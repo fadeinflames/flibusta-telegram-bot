@@ -30,7 +30,7 @@ COPY requirements.txt /srv/
 RUN pip install --no-cache-dir --break-system-packages -r requirements.txt
 
 # Создаем директории для данных
-RUN mkdir -p /srv/books /srv/logs
+RUN mkdir -p /srv/books /srv/logs /srv/data
 
 # Копируем исходный код
 COPY src ./src
@@ -39,7 +39,7 @@ COPY src ./src
 # COPY .env ./
 
 # Создаем volume для базы данных и логов
-VOLUME ["/srv/books", "/srv/logs"]
+VOLUME ["/srv/books", "/srv/logs", "/srv/data"]
 
 # Указываем, что контейнер будет слушать (для документации)
 EXPOSE 8080

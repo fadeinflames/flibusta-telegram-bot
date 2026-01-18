@@ -2,7 +2,7 @@ import os
 from datetime import time
 
 from dotenv import load_dotenv
-from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, MessageHandler
+from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, MessageHandler, InlineQueryHandler
 from telegram.ext.filters import TEXT
 from telegram.request import HTTPXRequest
 
@@ -25,7 +25,9 @@ from src.tg_bot import (
     settings_command,
     setpage_command,
     setformat_command,
-    cleanup_job
+    cleanup_job,
+    app_error_handler,
+    inline_query
 )
 
 from src import database as db
@@ -101,6 +103,8 @@ def main():
     # ===== ОБРАБОТЧИКИ =====
     app.add_handler(CallbackQueryHandler(button))
     app.add_handler(MessageHandler(TEXT, find_the_book))
+    app.add_handler(InlineQueryHandler(inline_query))
+    app.add_error_handler(app_error_handler)
     
     # ===== ЗАДАЧИ =====
     # Ежедневная очистка старых данных в 3:00
