@@ -214,7 +214,7 @@ def scrape_books_by_author(text: str) -> list[list[Book]] | None:
                         book = Book(book_id)
                         book.title = book_link.text.strip()
                         book.author = author
-                    book.link = config.SITE + href + '/'
+                        book.link = config.SITE + href + '/'
                         result.append(book)
         
         # Способ 3: все ссылки на книги в форме
@@ -226,7 +226,7 @@ def scrape_books_by_author(text: str) -> list[list[Book]] | None:
                 book = Book(book_id)
                 book.title = book_link.text.strip()
                 book.author = author
-                    book.link = config.SITE + href + '/'
+                book.link = config.SITE + href + '/'
                 result.append(book)
         
         if result:
