@@ -7,11 +7,24 @@ from dataclasses import dataclass, field
 
 import requests
 from bs4 import BeautifulSoup
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 from src import config
 
 SESSION = requests.Session()
 SESSION.headers.update({"User-Agent": config.USER_AGENT})
+
+# Автоматические ретраи при сетевых ошибках и ошибках сервера
+_retry_strategy = Retry(
+    total=config.REQUEST_MAX_RETRIES,
+    backoff_factor=config.REQUEST_RETRY_BACKOFF,
+    status_forcelist=[429, 500, 502, 503, 504],
+    allowed_methods=["GET"],
+)
+_adapter = HTTPAdapter(max_retries=_retry_strategy)
+SESSION.mount("http://", _adapter)
+SESSION.mount("https://", _adapter)
 
 _PAGE_CACHE: "OrderedDict[str, tuple[float, BeautifulSoup]]" = OrderedDict()
 
@@ -27,9 +40,14 @@ class Book:
     size: str = ""
     series: str = ""
     year: str = ""
+    annotation: str = ""
+    genres: list = field(default_factory=list)
+    rating: str = ""
+    author_link: str = ""
 
     def __str__(self):
         return f'{self.title} - {self.author} ({self.id})'
+
 
 def get_page(url):
     """Получение страницы"""
@@ -112,6 +130,8 @@ def scrape_books_by_title(text: str) -> list[Book] | None:
                 link_href = link.get('href', '')
                 if link_href.startswith('/a/'):
                     authors.append(link.text.strip())
+                    if not book.author_link:
+                        book.author_link = config.SITE + link_href + '/'
             
             book.author = ', '.join(authors) if authors else '[автор не указан]'
             result.append(book)
@@ -199,6 +219,7 @@ def scrape_books_by_author(text: str) -> list[list[Book]] | None:
                     book = Book(book_id)
                     book.title = book_link.text.strip()
                     book.author = author
+                    book.author_link = author_link
                     book.link = config.SITE + href + '/'
                     result.append(book)
         
@@ -214,6 +235,7 @@ def scrape_books_by_author(text: str) -> list[list[Book]] | None:
                         book = Book(book_id)
                         book.title = book_link.text.strip()
                         book.author = author
+                        book.author_link = author_link
                         book.link = config.SITE + href + '/'
                         result.append(book)
         
@@ -226,6 +248,7 @@ def scrape_books_by_author(text: str) -> list[list[Book]] | None:
                 book = Book(book_id)
                 book.title = book_link.text.strip()
                 book.author = author
+                book.author_link = author_link
                 book.link = config.SITE + href + '/'
                 result.append(book)
         
@@ -272,6 +295,8 @@ def scrape_books_mbl(title: str, author: str) -> list[Book] | None:
             authors = [a.text.strip() for a in author_links]
             # Реверсируем порядок для правильного отображения
             book.author = ', '.join(authors[::-1])
+            # Сохраняем ссылку на первого автора
+            book.author_link = config.SITE + author_links[0].get('href', '') + '/'
         else:
             book.author = author or '[автор не указан]'
         
@@ -281,7 +306,7 @@ def scrape_books_mbl(title: str, author: str) -> list[Book] | None:
 
 
 def get_book_by_id(book_id):
-    """Получение книги по ID"""
+    """Получение книги по ID с аннотацией, жанрами и рейтингом"""
     book = Book(book_id)
     book.link = f"{config.SITE}/b/{book_id}/"
 
@@ -304,10 +329,8 @@ def get_book_by_id(book_id):
         return None
     
     # Размер книги - ищем в разных местах
-    # Ищем span с размером
     size_span = target_div.find('span', string=re.compile(r'\d+.*[МК]Б'))
     if not size_span:
-        # Пробуем найти в тексте страницы
         size_elements = target_div.find_all(string=re.compile(r'Размер.*?\d+.*?[МК]Б'))
         if size_elements:
             book.size = size_elements[0].strip()
@@ -333,10 +356,126 @@ def get_book_by_id(book_id):
     author_link = target_h1.find_next('a')
     if author_link and '/a/' in author_link.get('href', ''):
         book.author = author_link.text.strip()
+        book.author_link = config.SITE + author_link.get('href', '') + '/'
     else:
         book.author = '[автор не указан]'
 
+    # ── Жанры ──
+    try:
+        genre_links = target_div.find_all('a', href=re.compile(r'^/g/\d+'))
+        if genre_links:
+            book.genres = list(dict.fromkeys(
+                g.text.strip() for g in genre_links if g.text.strip()
+            ))
+    except Exception:
+        pass
+
+    # ── Аннотация ──
+    try:
+        # Flibusta хранит аннотацию в <p> после метаданных
+        # Пробуем найти блок с описанием
+        annotation_parts = []
+
+        # Способ 1: ищем <h2> или заголовок "Аннотация"
+        ann_header = target_div.find(
+            ['h2', 'h3'], string=re.compile(r'аннотация|описание', re.IGNORECASE)
+        )
+        if ann_header:
+            sibling = ann_header.find_next_sibling()
+            while sibling and sibling.name in ('p', 'div', None):
+                txt = sibling.get_text(strip=True)
+                if txt:
+                    annotation_parts.append(txt)
+                sibling = sibling.find_next_sibling()
+                if sibling and sibling.name in ('h2', 'h3', 'form'):
+                    break
+
+        # Способ 2: ищем <p> в content-area
+        if not annotation_parts:
+            content_div = target_div.find('div', class_=re.compile(
+                r'content|body|description|field-item', re.IGNORECASE
+            ))
+            if content_div:
+                paragraphs = content_div.find_all('p')
+                for p in paragraphs:
+                    txt = p.get_text(strip=True)
+                    if txt and len(txt) > 20:
+                        annotation_parts.append(txt)
+
+        # Способ 3: просто все <p> в main div (фильтруем короткие)
+        if not annotation_parts:
+            for p in target_div.find_all('p'):
+                txt = p.get_text(strip=True)
+                # Пропускаем слишком короткие или технические строки
+                if (txt and len(txt) > 30
+                        and not re.match(r'^(Скачать|Размер|Формат)', txt)):
+                    annotation_parts.append(txt)
+
+        if annotation_parts:
+            book.annotation = '\n'.join(annotation_parts[:5])  # макс 5 абзацев
+            # Обрезаем до 1500 символов
+            if len(book.annotation) > 1500:
+                book.annotation = book.annotation[:1497] + '...'
+    except Exception:
+        pass
+
+    # ── Серия ──
+    try:
+        series_link = target_div.find('a', href=re.compile(r'^/sequence/\d+'))
+        if series_link:
+            book.series = series_link.text.strip()
+    except Exception:
+        pass
+
+    # ── Год ──
+    try:
+        if not book.year:
+            year_match = target_div.find(string=re.compile(r'Год\s*издания.*?(\d{4})'))
+            if year_match:
+                m = re.search(r'(\d{4})', str(year_match))
+                if m:
+                    book.year = m.group(1)
+    except Exception:
+        pass
+
     return book
+
+
+def get_other_books_by_author(author_url: str, exclude_book_id: str = None,
+                               limit: int = 10) -> list[Book]:
+    """Получить другие книги автора по ссылке на страницу автора."""
+    if not author_url:
+        return []
+    try:
+        sp = get_page(author_url)
+        if not sp:
+            return []
+
+        author_h1 = sp.find("h1", attrs={"class": "title"})
+        author_name = author_h1.text.strip() if author_h1 else ""
+
+        target_form = sp.find('form', attrs={'method': 'POST'})
+        if not target_form:
+            return []
+
+        result = []
+        book_links = target_form.find_all('a', href=re.compile(r'^/b/\d+$'))
+        for bl in book_links:
+            href = bl.get('href', '')
+            bid = href.replace('/b/', '')
+            if bid == exclude_book_id:
+                continue
+            b = Book(bid)
+            b.title = bl.text.strip()
+            b.author = author_name
+            b.author_link = author_url
+            b.link = config.SITE + href + '/'
+            result.append(b)
+            if len(result) >= limit:
+                break
+        return result
+    except Exception:
+        return []
 
 
 def download_book_cover(book: Book):
@@ -398,7 +537,7 @@ def download_book(book: Book, b_format: str):
         
     except requests.exceptions.Timeout:
         return None, None
-    except requests.exceptions.RequestException as e:
+    except requests.exceptions.RequestException:
         return None, None
     except Exception:
         return None, None

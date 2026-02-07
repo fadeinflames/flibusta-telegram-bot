@@ -6,12 +6,12 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    command: python src/srv.py
     restart: always
     env_file:
       - .env
     volumes:
       - ./books:/srv/books
-      - ./search_log.log:/srv/search_log.log
-      - ./src:/srv/src
+      - ./logs:/srv/logs
       - ./data:/srv/data
+      # Раскомментируйте для hot-reload при разработке:
+      # - ./src:/srv/src

@@ -1,10 +1,16 @@
 import logging
+import os
 import sys
 from datetime import datetime, UTC
+from logging.handlers import RotatingFileHandler
 
 from json_log_formatter import JSONFormatter, _json_serializable
 
+from src import config
+
+# Silence noisy HTTP libraries
 logging.getLogger("httpx").setLevel(logging.ERROR)
+logging.getLogger("httpcore").setLevel(logging.ERROR)
 
 
 class CustomJSONFormatter(JSONFormatter):
@@ -32,27 +38,45 @@ class CustomJSONFormatter(JSONFormatter):
         return result
 
 
-formatter = CustomJSONFormatter()
+_json_formatter = CustomJSONFormatter()
 
-# basicConfig не поддерживает encoding напрямую, используем handlers
 logging.basicConfig(
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-        level=logging.INFO,
-        handlers=[
-            logging.StreamHandler(sys.stdout)
-        ]
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=logging.INFO,
+    handlers=[logging.StreamHandler(sys.stdout)],
 )
 
 
-def get_logger(name: str):
+def get_logger(name: str) -> logging.Logger:
+    """Return a named logger with JSON file + stream handlers.
+
+    Handlers are added only once per logger name, preventing duplicates
+    when the function is called multiple times with the same name.
+    """
     logger = logging.getLogger(name)
+
+    # Avoid adding handlers twice
+    if logger.handlers:
+        return logger
+
     logger.propagate = False
-    file_handler = logging.FileHandler(filename="search_log.log", encoding="utf-8")
+
+    # ── File handler with rotation ──
+    os.makedirs(config.LOGS_DIR, exist_ok=True)
+    file_handler = RotatingFileHandler(
+        filename=config.LOG_FILE,
+        encoding="utf-8",
+        maxBytes=10 * 1024 * 1024,  # 10 MB per file
+        backupCount=5,
+    )
     file_handler.setLevel(logging.INFO)
-    file_handler.setFormatter(formatter)
+    file_handler.setFormatter(_json_formatter)
     logger.addHandler(file_handler)
+
+    # ── Console handler ──
     stream_handler = logging.StreamHandler(stream=sys.stdout)
     stream_handler.setLevel(logging.INFO)
-    stream_handler.setFormatter(formatter)
+    stream_handler.setFormatter(_json_formatter)
     logger.addHandler(stream_handler)
+
     return logger

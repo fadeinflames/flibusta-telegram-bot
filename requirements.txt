@@ -1,4 +1,4 @@
-# Telegram Bot с поддержкой JobQueue
+# Telegram Bot with JobQueue support
 python-telegram-bot[job-queue]>=20.0
 
 # Environment variables
@@ -11,10 +11,3 @@ lxml>=4.9.0
 
 # Logging
 json-log-formatter>=0.5.2
-
-# JobQueue dependencies (если не установятся автоматически)
-APScheduler>=3.10.0
-pytz>=2023.3
-
-# Optional: для асинхронной работы
-aiohttp>=3.9.0
