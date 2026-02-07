@@ -181,31 +181,62 @@ def _shelf_label(tag: str) -> str:
 
 
 def _try_split_search(query: str):
-    """Попробовать разбить запрос на название+автор и найти через точный поиск.
+    """Попробовать разбить запрос на название+автор и найти книгу.
+
+    Стратегия:
+      1) scrape_books_mbl — точный поиск для каждого варианта разбиения.
+      2) scrape_books_by_author — поиск по автору + фильтр по названию.
 
     Перебирает точки разделения с конца (1 слово как автор, 2, …).
-    Возвращает (books, title, author) при первом успешном варианте
-    или (None, None, None) если ничего не нашлось.
+    Возвращает (books, title_part, author_part) или (None, None, None).
     """
     words = query.split()
     if len(words) < 2:
         return None, None, None
 
-    # Пробуем от 1 до len-1 слов справа как «автор»
+    # ── Стратегия 1: точный поиск (makebooklist) ──
     for author_words in range(1, len(words)):
-        title = ' '.join(words[:-author_words])
-        author = ' '.join(words[-author_words:])
-        if not title or not author:
+        title_part = ' '.join(words[:-author_words])
+        author_part = ' '.join(words[-author_words:])
+        if not title_part or not author_part:
             continue
 
-        cache_key = f"exact:{title}|{author}"
+        cache_key = f"exact:{title_part}|{author_part}"
         books = _cache_get(cache_key)
         if books is None:
-            books = flib.scrape_books_mbl(title, author)
+            books = flib.scrape_books_mbl(title_part, author_part)
             _cache_set(cache_key, books)
 
         if books:
-            return books, title, author
+            return books, title_part, author_part
+
+    # ── Стратегия 2: поиск по автору + фильтр по совпадению названия ──
+    title_lower = query.lower()
+    for author_words in range(1, len(words)):
+        title_part = ' '.join(words[:-author_words])
+        author_part = ' '.join(words[-author_words:])
+        if not title_part or not author_part:
+            continue
+
+        cache_key = f"author:{author_part}"
+        authors_books = _cache_get(cache_key)
+        if authors_books is None:
+            authors_books = flib.scrape_books_by_author(author_part)
+            _cache_set(cache_key, authors_books)
+
+        if not authors_books:
+            continue
+
+        # Собираем все книги всех найденных авторов
+        all_books = []
+        for group in authors_books:
+            all_books.extend(group)
+
+        # Фильтруем: название книги должно содержать title_part
+        title_part_lower = title_part.lower()
+        matched = [b for b in all_books if title_part_lower in b.title.lower()]
+        if matched:
+            return matched, title_part, author_part
 
     return None, None, None
 
