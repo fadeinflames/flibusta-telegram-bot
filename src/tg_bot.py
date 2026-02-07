@@ -180,6 +180,36 @@ def _shelf_label(tag: str) -> str:
     return config.FAVORITE_SHELVES.get(tag, tag or "Все")
 
 
+def _try_split_search(query: str):
+    """Попробовать разбить запрос на название+автор и найти через точный поиск.
+
+    Перебирает точки разделения с конца (1 слово как автор, 2, …).
+    Возвращает (books, title, author) при первом успешном варианте
+    или (None, None, None) если ничего не нашлось.
+    """
+    words = query.split()
+    if len(words) < 2:
+        return None, None, None
+
+    # Пробуем от 1 до len-1 слов справа как «автор»
+    for author_words in range(1, len(words)):
+        title = ' '.join(words[:-author_words])
+        author = ' '.join(words[-author_words:])
+        if not title or not author:
+            continue
+
+        cache_key = f"exact:{title}|{author}"
+        books = _cache_get(cache_key)
+        if books is None:
+            books = flib.scrape_books_mbl(title, author)
+            _cache_set(cache_key, books)
+
+        if books:
+            return books, title, author
+
+    return None, None, None
+
+
 # ────────────────────── Access decorators ──────────────────────
 
 def check_access(func):
@@ -417,6 +447,23 @@ async def search_by_title(update: Update, context: CallbackContext) -> None:
             books = flib.scrape_books_by_title(title)
             _cache_set(cache_key, books)
         
+        # ── Фолбэк: пробуем разбить на название+автор ──
+        if not books and len(title.split()) >= 2:
+            logger.info("Title search returned nothing, trying split fallback",
+                        extra={"query": title, "user_id": user_id})
+            books, split_title, split_author = _try_split_search(title)
+            if books:
+                db.add_search_history(user_id, "exact", f"{split_title} | {split_author}",
+                                      len(books))
+                context.user_data['search_results'] = books
+                context.user_data['search_results_original'] = list(books)
+                context.user_data['search_type'] = f'«{split_title}» + «{split_author}»'
+                context.user_data['search_query'] = title
+                context.user_data['current_results_page'] = 1
+
+                await show_books_page(books, update, context, mes, page=1)
+                return
+
         db.add_search_history(user_id, "title", title, len(books) if books else 0)
         
         if not books:
@@ -774,8 +821,26 @@ async def find_the_book(update: Update, context: CallbackContext) -> None:
                 books = flib.scrape_books_by_title(search_string)
                 _cache_set(cache_key, books)
             
+            # ── Фолбэк: если по названию не найдено, пробуем разбить на название+автор ──
+            if not books and len(search_string.split()) >= 2:
+                logger.info("Title search returned nothing, trying split fallback",
+                            extra={"query": search_string, "user_id": user_id})
+                books, split_title, split_author = _try_split_search(search_string)
+                if books:
+                    # Записываем как exact-поиск, т.к. фактически это он
+                    db.add_search_history(user_id, "exact", f"{split_title} | {split_author}",
+                                          len(books))
+                    context.user_data['search_results'] = books
+                    context.user_data['search_results_original'] = list(books)
+                    context.user_data['search_type'] = f'«{split_title}» + «{split_author}»'
+                    context.user_data['search_query'] = search_string
+                    context.user_data['current_results_page'] = 1
+
+                    await show_books_page(books, update, context, mes, page=1)
+                    return
+
             db.add_search_history(user_id, "title", search_string, len(books) if books else 0)
-            
+
             if not books:
                 await context.bot.delete_message(chat_id=mes.chat_id, message_id=mes.message_id)
                 
@@ -784,8 +849,7 @@ async def find_the_book(update: Update, context: CallbackContext) -> None:
                     "💡 *Попробуйте:*\n"
                     "• Проверить правописание\n"
                     "• Использовать `/author` для поиска по автору\n"
-                    "• Добавить автора на новой строке для точного поиска:\n"
-                    f"```\n{search_string}\nФамилия автора\n```",
+                    "• Использовать `/exact название | автор` для точного поиска",
                     parse_mode=ParseMode.MARKDOWN
                 )
                 return
