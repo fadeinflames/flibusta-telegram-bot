@@ -11,6 +11,8 @@ from src import config
 # Silence noisy HTTP libraries
 logging.getLogger("httpx").setLevel(logging.ERROR)
 logging.getLogger("httpcore").setLevel(logging.ERROR)
+# Ретраи urllib3 при обрыве соединения (RemoteDisconnected) — ожидаемы для Flibusta; не засоряем WARNING
+logging.getLogger("urllib3.connectionpool").setLevel(logging.ERROR)
 
 
 class CustomJSONFormatter(JSONFormatter):

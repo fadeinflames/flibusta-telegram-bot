@@ -17,6 +17,8 @@ USER_AGENT = (
 
 # ──────────────────── Requests ────────────────────
 REQUEST_TIMEOUT = (10, 30)
+# Для скачивания файлов — длиннее read timeout (файлы могут быть большими, сервер может отвечать медленно)
+DOWNLOAD_TIMEOUT = (10, 60)
 REQUEST_MAX_RETRIES = 3
 REQUEST_RETRY_BACKOFF = 1.0  # seconds, multiplied by attempt number
 

@@ -484,7 +484,7 @@ def download_book_cover(book: Book):
         return
         
     try:
-        c_response = SESSION.get(book.cover, timeout=config.REQUEST_TIMEOUT)
+        c_response = SESSION.get(book.cover, timeout=config.DOWNLOAD_TIMEOUT)
         c_response.raise_for_status()
         
         cover_dir = os.path.join(config.BOOKS_DIR, book.id)
@@ -505,7 +505,7 @@ def download_book(book: Book, b_format: str):
     book_url = book.formats[b_format]
 
     try:
-        b_response = SESSION.get(book_url, timeout=config.REQUEST_TIMEOUT)
+        b_response = SESSION.get(book_url, timeout=config.DOWNLOAD_TIMEOUT)
         
         b_response.raise_for_status()
 
