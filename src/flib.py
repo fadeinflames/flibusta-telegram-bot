@@ -11,7 +11,9 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 from src import config
+from src.custom_logging import get_logger
 
+logger = get_logger(__name__)
 SESSION = requests.Session()
 SESSION.headers.update({"User-Agent": config.USER_AGENT})
 
@@ -536,10 +538,25 @@ def download_book(book: Book, b_format: str):
         return b_response.content, b_filename
         
     except requests.exceptions.Timeout:
+        logger.warning(
+            "Download timeout",
+            extra={"book_id": book.id, "format": b_format, "url": book_url},
+            exc_info=True,
+        )
         return None, None
     except requests.exceptions.RequestException:
+        logger.warning(
+            "Download request failed",
+            extra={"book_id": book.id, "format": b_format, "url": book_url},
+            exc_info=True,
+        )
         return None, None
     except Exception:
+        logger.warning(
+            "Download error",
+            extra={"book_id": book.id, "format": b_format, "url": book_url},
+            exc_info=True,
+        )
         return None, None
 
 
