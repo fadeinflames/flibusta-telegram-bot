@@ -17,6 +17,34 @@ logger = get_logger(__name__)
 SESSION = requests.Session()
 SESSION.headers.update({"User-Agent": config.USER_AGENT})
 
+
+def _fix_redirect_location(location: str) -> str | None:
+    """Исправляет редирект http://host:443 -> https://host (Flibusta отдаёт такой Location)."""
+    if not location or not location.startswith("http://") or ":443" not in location:
+        return None
+    parsed = urllib.parse.urlparse(location)
+    if not parsed.netloc.endswith(":443"):
+        return None
+    new_netloc = parsed.netloc.replace(":443", "")
+    return urllib.parse.urlunparse(
+        ("https", new_netloc, parsed.path or "/", parsed.params, parsed.query, parsed.fragment)
+    )
+
+
+class RedirectFixAdapter(HTTPAdapter):
+    """Исправляет Location с http://host:443 на https://host перед следованием редиректу."""
+
+    def send(self, request, **kwargs):
+        response = super().send(request, **kwargs)
+        if 300 <= response.status_code < 400:
+            loc = response.headers.get("Location")
+            if loc:
+                fixed = _fix_redirect_location(loc)
+                if fixed:
+                    response.headers["Location"] = fixed
+        return response
+
+
 # Автоматические ретраи при сетевых ошибках и ошибках сервера
 _retry_strategy = Retry(
     total=config.REQUEST_MAX_RETRIES,
@@ -24,7 +52,7 @@ _retry_strategy = Retry(
     status_forcelist=[429, 500, 502, 503, 504],
     allowed_methods=["GET"],
 )
-_adapter = HTTPAdapter(max_retries=_retry_strategy)
+_adapter = RedirectFixAdapter(max_retries=_retry_strategy)
 SESSION.mount("http://", _adapter)
 SESSION.mount("https://", _adapter)
 
