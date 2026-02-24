@@ -544,10 +544,15 @@ def download_book(book: Book, b_format: str):
             exc_info=True,
         )
         return None, None
-    except requests.exceptions.RequestException:
+    except requests.exceptions.RequestException as e:
+        extra = {"book_id": book.id, "format": b_format, "url": book_url}
+        # Редирект (напр. epub → static.flibusta.is) — логируем финальный URL
+        req = getattr(e, "request", None)
+        if req and getattr(req, "url", None) and req.url != book_url:
+            extra["resolved_url"] = req.url
         logger.warning(
             "Download request failed",
-            extra={"book_id": book.id, "format": b_format, "url": book_url},
+            extra=extra,
             exc_info=True,
         )
         return None, None

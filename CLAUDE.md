@@ -52,6 +52,7 @@ src/
 - In-memory LRU-кэш страниц (`_PAGE_CACHE`, OrderedDict, TTL 300 сек, макс. 128 записей).
 - `Book` — dataclass с полями: `id`, `title`, `author`, `link`, `formats` (dict), `cover`, `size`, `series`, `year`, `annotation`, `genres` (list), `rating`, `author_link`.
 - `formats` — dict, где ключ = текстовое представление формата (например `"(fb2)"`), значение = URL для скачивания.
+- Скачивание: запрос идёт на `{SITE}/b/{id}/epub` (или другой формат). Для epub/mobi и др. Flibusta может делать **редирект на `https://static.flibusta.is`** (конвертер). Ошибки соединения часто возникают именно при обращении к static.flibusta.is; при сбое в лог пишется `resolved_url` — финальный URL после редиректа.
 
 #### Методы поиска
 
