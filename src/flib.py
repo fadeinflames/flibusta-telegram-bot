@@ -100,7 +100,10 @@ def get_page(url):
             _PAGE_CACHE.popitem(last=False)
 
         return soup
-    except (requests.exceptions.RequestException, Exception):
+    except requests.exceptions.RequestException:
+        return None
+    except Exception:
+        logger.warning("Unexpected parser error in get_page", extra={"url": url}, exc_info=True)
         return None
 
 
@@ -398,7 +401,7 @@ def get_book_by_id(book_id):
                 g.text.strip() for g in genre_links if g.text.strip()
             ))
     except Exception:
-        pass
+        logger.debug("Failed to parse genres", extra={"book_id": book_id}, exc_info=True)
 
     # ── Аннотация ──
     try:
@@ -447,7 +450,7 @@ def get_book_by_id(book_id):
             if len(book.annotation) > 1500:
                 book.annotation = book.annotation[:1497] + '...'
     except Exception:
-        pass
+        logger.debug("Failed to parse annotation", extra={"book_id": book_id}, exc_info=True)
 
     # ── Серия ──
     try:
@@ -455,7 +458,7 @@ def get_book_by_id(book_id):
         if series_link:
             book.series = series_link.text.strip()
     except Exception:
-        pass
+        logger.debug("Failed to parse series", extra={"book_id": book_id}, exc_info=True)
 
     # ── Год ──
     try:
@@ -466,7 +469,7 @@ def get_book_by_id(book_id):
                 if m:
                     book.year = m.group(1)
     except Exception:
-        pass
+        logger.debug("Failed to parse year", extra={"book_id": book_id}, exc_info=True)
 
     return book
 
@@ -505,6 +508,7 @@ def get_other_books_by_author(author_url: str, exclude_book_id: str = None,
                 break
         return result
     except Exception:
+        logger.warning("Failed to fetch author's books", extra={"author_url": author_url}, exc_info=True)
         return []
 
 
@@ -523,8 +527,12 @@ def download_book_cover(book: Book):
         c_full_path = os.path.join(cover_dir, 'cover.jpg')
         with open(c_full_path, "wb") as f:
             f.write(c_response.content)
-    except Exception:
-        pass  # Игнорируем ошибки при скачивании обложки
+    except (OSError, requests.exceptions.RequestException):
+        logger.debug(
+            "Cover download failed",
+            extra={"book_id": getattr(book, "id", None), "cover_url": getattr(book, "cover", None)},
+            exc_info=True,
+        )
 
 
 def download_book(book: Book, b_format: str):
@@ -610,11 +618,11 @@ def cleanup_old_files(days: int = 30):
                     for name in files:
                         try:
                             os.remove(os.path.join(root, name))
-                        except Exception:
-                            pass
+                        except OSError:
+                            logger.debug("Failed to remove file", extra={"path": os.path.join(root, name)}, exc_info=True)
                     try:
                         os.rmdir(root)
-                    except Exception:
-                        pass
-        except Exception:
+                    except OSError:
+                        logger.debug("Failed to remove directory", extra={"path": root}, exc_info=True)
+        except OSError:
             continue

@@ -7,7 +7,6 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # ──────────────────── Site ────────────────────
 SITE = os.getenv("FLIBUSTA_SITE", "http://flibusta.is")
 ALL_FORMATS = ["fb2", "epub", "mobi", "pdf", "djvu"]
-KINDLE_FORMATS = ["epub", "mobi", "pdf", "fb2"]
 
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "

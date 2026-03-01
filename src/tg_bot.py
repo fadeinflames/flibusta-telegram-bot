@@ -1,13 +1,14 @@
+import asyncio
 import os
 import io
 import time
-import re
 import math
 from urllib.parse import quote, unquote
 from functools import wraps
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram import InlineQueryResultArticle, InputTextMessageContent
+from telegram.error import BadRequest, Forbidden
 from telegram.ext import CallbackContext
 from telegram.constants import ParseMode
 
@@ -15,6 +16,20 @@ from src import flib
 from src import database as db
 from src import config
 from src.custom_logging import get_logger
+from src.tg_bot_nav import (
+    pop_nav as _pop_nav,
+    push_nav as _push_nav,
+    reset_nav as _reset_nav,
+)
+from src.tg_bot_presentation import (
+    escape_md as _escape_md,
+    get_user_level as _get_user_level,
+    next_level_info as _next_level_info,
+    shelf_label as _shelf_label,
+)
+from src.tg_bot_ui import breadcrumbs as _breadcrumbs
+from src.tg_bot_ui import screen as _screen
+from src.tg_bot_ui import truncate as _truncate
 
 logger = get_logger(__name__)
 
@@ -22,10 +37,6 @@ logger = get_logger(__name__)
 
 # In-memory search cache: key -> (timestamp, value)
 _SEARCH_CACHE: "dict[str, tuple[float, object]]" = {}
-
-# Навигационный стек
-_NAV_STACK_KEY = "nav_stack"
-_MAX_NAV_STACK = 10
 
 # Получаем список разрешенных пользователей из переменной окружения
 ALLOWED_USERS = os.getenv('ALLOWED_USERS', '').split(',')
@@ -61,18 +72,14 @@ def _inc_error_stat(context: CallbackContext, error: Exception):
     stats[name] = stats.get(name, 0) + 1
 
 
-def _push_nav(context: CallbackContext, entry: dict):
-    stack = context.user_data.setdefault(_NAV_STACK_KEY, [])
-    if stack and stack[-1] == entry:
-        return
-    stack.append(entry)
-    if len(stack) > _MAX_NAV_STACK:
-        stack.pop(0)
+async def _db_call(func, *args, **kwargs):
+    """Run sync DB call in thread pool."""
+    return await asyncio.to_thread(func, *args, **kwargs)
 
 
-def _pop_nav(context: CallbackContext):
-    stack = context.user_data.get(_NAV_STACK_KEY, [])
-    return stack.pop() if stack else None
+async def _flib_call(func, *args, **kwargs):
+    """Run sync scraper/network call in thread pool."""
+    return await asyncio.to_thread(func, *args, **kwargs)
 
 
 async def _render_nav_entry(entry: dict, update: Update, context: CallbackContext):
@@ -97,15 +104,6 @@ async def _render_nav_entry(entry: dict, update: Update, context: CallbackContex
         await show_main_menu(update, context)
 
 
-def _escape_md(text: str) -> str:
-    """Escape MarkdownV1 special characters in user-provided text."""
-    if not text:
-        return ""
-    for ch in ('_', '*', '`', '['):
-        text = text.replace(ch, f'\\{ch}')
-    return text
-
-
 async def _safe_edit_or_send(query, context: CallbackContext, text: str,
                              reply_markup, parse_mode=ParseMode.MARKDOWN):
     """Edit message text; if it fails (e.g. previous message was a photo),
@@ -114,10 +112,10 @@ async def _safe_edit_or_send(query, context: CallbackContext, text: str,
         await query.edit_message_text(
             text, parse_mode=parse_mode, reply_markup=reply_markup
         )
-    except Exception:
+    except (BadRequest, Forbidden):
         try:
             await query.delete_message()
-        except Exception:
+        except (BadRequest, Forbidden):
             pass
         await context.bot.send_message(
             chat_id=query.message.chat_id,
@@ -127,9 +125,9 @@ async def _safe_edit_or_send(query, context: CallbackContext, text: str,
         )
 
 
-def _book_from_cache(book_id: str):
+async def _book_from_cache(book_id: str):
     """Restore a Book from DB cache, or fetch from Flibusta."""
-    cached = db.get_cached_book(book_id)
+    cached = await _db_call(db.get_cached_book, book_id)
     if cached:
         book = flib.Book(book_id)
         book.title = cached['title']
@@ -145,42 +143,13 @@ def _book_from_cache(book_id: str):
         book.rating = cached.get('rating', '')
         book.author_link = cached.get('author_link', '')
         return book
-    book = flib.get_book_by_id(book_id)
+    book = await _flib_call(flib.get_book_by_id, book_id)
     if book:
-        db.cache_book(book)
+        await _db_call(db.cache_book, book)
     return book
 
 
-def _get_user_level(search_count: int, download_count: int) -> str:
-    """Определить уровень достижения пользователя."""
-    level = config.ACHIEVEMENT_LEVELS[0]
-    for lvl in config.ACHIEVEMENT_LEVELS:
-        if search_count >= lvl["searches"] and download_count >= lvl["downloads"]:
-            level = lvl
-    return level["name"]
-
-
-def _next_level_info(search_count: int, download_count: int) -> str:
-    """Информация о следующем уровне."""
-    for i, lvl in enumerate(config.ACHIEVEMENT_LEVELS):
-        if search_count < lvl["searches"] or download_count < lvl["downloads"]:
-            need_s = max(0, lvl["searches"] - search_count)
-            need_d = max(0, lvl["downloads"] - download_count)
-            parts = []
-            if need_s > 0:
-                parts.append(f"{need_s} поисков")
-            if need_d > 0:
-                parts.append(f"{need_d} скачиваний")
-            return f"До «{lvl['name']}»: {', '.join(parts)}"
-    return "Максимальный уровень достигнут! 🎉"
-
-
-def _shelf_label(tag: str) -> str:
-    """Получить человекочитаемое название полки."""
-    return config.FAVORITE_SHELVES.get(tag, tag or "Все")
-
-
-def _try_split_search(query: str):
+async def _try_split_search(query: str):
     """Попробовать разбить запрос на название+автор и найти книгу.
 
     Стратегия:
@@ -204,7 +173,7 @@ def _try_split_search(query: str):
         cache_key = f"exact:{title_part}|{author_part}"
         books = _cache_get(cache_key)
         if books is None:
-            books = flib.scrape_books_mbl(title_part, author_part)
+            books = await _flib_call(flib.scrape_books_mbl, title_part, author_part)
             _cache_set(cache_key, books)
 
         if books:
@@ -221,7 +190,7 @@ def _try_split_search(query: str):
         cache_key = f"author:{author_part}"
         authors_books = _cache_get(cache_key)
         if authors_books is None:
-            authors_books = flib.scrape_books_by_author(author_part)
+            authors_books = await _flib_call(flib.scrape_books_by_author, author_part)
             _cache_set(cache_key, authors_books)
 
         if not authors_books:
@@ -248,8 +217,9 @@ def check_access(func):
     @wraps(func)
     async def wrapper(update: Update, context: CallbackContext):
         user_id = str(update.effective_user.id)
-        
-        db.add_or_update_user(
+
+        await _db_call(
+            db.add_or_update_user,
             user_id=user_id,
             username=update.effective_user.username,
             full_name=update.effective_user.full_name,
@@ -302,8 +272,9 @@ def check_callback_access(func):
     @wraps(func)
     async def wrapper(update: Update, context: CallbackContext):
         user_id = str(update.effective_user.id)
-        
-        db.add_or_update_user(
+
+        await _db_call(
+            db.add_or_update_user,
             user_id=user_id,
             username=update.effective_user.username,
             full_name=update.effective_user.full_name
@@ -339,7 +310,7 @@ async def show_main_menu_text(update: Update, context: CallbackContext, is_start
     user_name = update.effective_user.first_name or "Книголюб"
     user_id = str(update.effective_user.id)
     
-    user_stats = db.get_user_stats(user_id)
+    user_stats = await _db_call(db.get_user_stats, user_id)
     favorites_count = user_stats.get('favorites_count', 0)
     search_count = user_stats.get('user_info', {}).get('search_count', 0)
     download_count = user_stats.get('user_info', {}).get('download_count', 0)
@@ -397,9 +368,9 @@ _Выберите команду для начала работы!_
     ]
 
     # Кнопка «повторить последний поиск»
-    last = db.get_last_search(user_id)
+    last = await _db_call(db.get_last_search, user_id)
     if last:
-        q_short = last['query'][:20] + '…' if len(last['query']) > 20 else last['query']
+        q_short = _truncate(last['query'], 20)
         keyboard.append([
             InlineKeyboardButton(f"🔄 Повторить: «{q_short}»", callback_data="repeat_search")
         ])
@@ -424,7 +395,7 @@ async def start_callback(update: Update, context: CallbackContext):
             if book_id.isdigit():
                 mes = await update.message.reply_text("🔍 Загружаю книгу...")
                 try:
-                    book = _book_from_cache(book_id)
+                    book = await _book_from_cache(book_id)
                     await context.bot.delete_message(chat_id=mes.chat_id, message_id=mes.message_id)
                     if book:
                         await show_book_details_with_favorite(book_id, update, context)
@@ -475,17 +446,19 @@ async def search_by_title(update: Update, context: CallbackContext) -> None:
         cache_key = f"title:{title}"
         books = _cache_get(cache_key)
         if books is None:
-            books = flib.scrape_books_by_title(title)
+            books = await _flib_call(flib.scrape_books_by_title, title)
             _cache_set(cache_key, books)
         
         # ── Фолбэк: пробуем разбить на название+автор ──
         if not books and len(title.split()) >= 2:
             logger.info("Title search returned nothing, trying split fallback",
                         extra={"query": title, "user_id": user_id})
-            books, split_title, split_author = _try_split_search(title)
+            books, split_title, split_author = await _try_split_search(title)
             if books:
-                db.add_search_history(user_id, "exact", f"{split_title} | {split_author}",
-                                      len(books))
+                await _db_call(
+                    db.add_search_history, user_id, "exact",
+                    f"{split_title} | {split_author}", len(books)
+                )
                 context.user_data['search_results'] = books
                 context.user_data['search_results_original'] = list(books)
                 context.user_data['search_type'] = f'«{split_title}» + «{split_author}»'
@@ -495,7 +468,7 @@ async def search_by_title(update: Update, context: CallbackContext) -> None:
                 await show_books_page(books, update, context, mes, page=1)
                 return
 
-        db.add_search_history(user_id, "title", title, len(books) if books else 0)
+        await _db_call(db.add_search_history, user_id, "title", title, len(books) if books else 0)
         
         if not books:
             await context.bot.delete_message(chat_id=mes.chat_id, message_id=mes.message_id)
@@ -548,11 +521,11 @@ async def search_by_author(update: Update, context: CallbackContext) -> None:
         cache_key = f"author:{author}"
         authors_books = _cache_get(cache_key)
         if authors_books is None:
-            authors_books = flib.scrape_books_by_author(author)
+            authors_books = await _flib_call(flib.scrape_books_by_author, author)
             _cache_set(cache_key, authors_books)
         
         if not authors_books or len(authors_books) == 0:
-            db.add_search_history(user_id, "author", author, 0)
+            await _db_call(db.add_search_history, user_id, "author", author, 0)
             await context.bot.delete_message(chat_id=mes.chat_id, message_id=mes.message_id)
             await update.message.reply_text(
                 f"😔 Автор «{author}» не найден.\n"
@@ -568,7 +541,7 @@ async def search_by_author(update: Update, context: CallbackContext) -> None:
                 all_books.extend(author_books)
         
         if not all_books:
-            db.add_search_history(user_id, "author", author, 0)
+            await _db_call(db.add_search_history, user_id, "author", author, 0)
             await context.bot.delete_message(chat_id=mes.chat_id, message_id=mes.message_id)
             await update.message.reply_text(
                 f"😔 У автора «{author}» нет доступных книг."
@@ -586,7 +559,7 @@ async def search_by_author(update: Update, context: CallbackContext) -> None:
         if books_list:
             books_list.sort(key=lambda x: x.title if hasattr(x, 'title') else '')
         
-        db.add_search_history(user_id, "author", author, len(books_list))
+        await _db_call(db.add_search_history, user_id, "author", author, len(books_list))
         
         context.user_data['search_results'] = books_list
         context.user_data['search_results_original'] = list(books_list)
@@ -645,10 +618,10 @@ async def search_exact(update: Update, context: CallbackContext) -> None:
         cache_key = f"exact:{title}|{author}"
         books = _cache_get(cache_key)
         if books is None:
-            books = flib.scrape_books_mbl(title, author)
+            books = await _flib_call(flib.scrape_books_mbl, title, author)
             _cache_set(cache_key, books)
         
-        db.add_search_history(user_id, "exact", f"{title} | {author}", len(books) if books else 0)
+        await _db_call(db.add_search_history, user_id, "exact", f"{title} | {author}", len(books) if books else 0)
         
         if not books:
             await context.bot.delete_message(chat_id=mes.chat_id, message_id=mes.message_id)
@@ -706,9 +679,9 @@ async def search_by_id(update: Update, context: CallbackContext) -> None:
     mes = await update.message.reply_text("🔍 Получаю информацию о книге...")
     
     try:
-        book = _book_from_cache(book_id)
+        book = await _book_from_cache(book_id)
         
-        db.add_search_history(user_id, "id", book_id, 1 if book else 0)
+        await _db_call(db.add_search_history, user_id, "id", book_id, 1 if book else 0)
         
         if not book:
             await context.bot.delete_message(chat_id=mes.chat_id, message_id=mes.message_id)
@@ -756,7 +729,7 @@ async def find_the_book(update: Update, context: CallbackContext) -> None:
     awaiting = context.user_data.get('awaiting')
     if awaiting == 'fav_search':
         context.user_data.pop('awaiting', None)
-        results = db.search_favorites(user_id, search_string)
+        results = await _db_call(db.search_favorites, user_id, search_string)
         if not results:
             await update.message.reply_text(
                 f"😔 В избранном ничего не найдено по запросу «{search_string}».",
@@ -807,10 +780,10 @@ async def find_the_book(update: Update, context: CallbackContext) -> None:
             cache_key = f"exact:{title}|{author}"
             books = _cache_get(cache_key)
             if books is None:
-                books = flib.scrape_books_mbl(title, author)
+                books = await _flib_call(flib.scrape_books_mbl, title, author)
                 _cache_set(cache_key, books)
             
-            db.add_search_history(user_id, "exact", f"{title} | {author}", len(books) if books else 0)
+            await _db_call(db.add_search_history, user_id, "exact", f"{title} | {author}", len(books) if books else 0)
             
             if not books:
                 await context.bot.delete_message(chat_id=mes.chat_id, message_id=mes.message_id)
@@ -849,18 +822,20 @@ async def find_the_book(update: Update, context: CallbackContext) -> None:
             cache_key = f"title:{search_string}"
             books = _cache_get(cache_key)
             if books is None:
-                books = flib.scrape_books_by_title(search_string)
+                books = await _flib_call(flib.scrape_books_by_title, search_string)
                 _cache_set(cache_key, books)
             
             # ── Фолбэк: если по названию не найдено, пробуем разбить на название+автор ──
             if not books and len(search_string.split()) >= 2:
                 logger.info("Title search returned nothing, trying split fallback",
                             extra={"query": search_string, "user_id": user_id})
-                books, split_title, split_author = _try_split_search(search_string)
+                books, split_title, split_author = await _try_split_search(search_string)
                 if books:
                     # Записываем как exact-поиск, т.к. фактически это он
-                    db.add_search_history(user_id, "exact", f"{split_title} | {split_author}",
-                                          len(books))
+                    await _db_call(
+                        db.add_search_history, user_id, "exact",
+                        f"{split_title} | {split_author}", len(books)
+                    )
                     context.user_data['search_results'] = books
                     context.user_data['search_results_original'] = list(books)
                     context.user_data['search_type'] = f'«{split_title}» + «{split_author}»'
@@ -870,7 +845,7 @@ async def find_the_book(update: Update, context: CallbackContext) -> None:
                     await show_books_page(books, update, context, mes, page=1)
                     return
 
-            db.add_search_history(user_id, "title", search_string, len(books) if books else 0)
+            await _db_call(db.add_search_history, user_id, "title", search_string, len(books) if books else 0)
 
             if not books:
                 await context.bot.delete_message(chat_id=mes.chat_id, message_id=mes.message_id)
@@ -931,7 +906,7 @@ async def handle_error(error, update: Update, context: CallbackContext, mes):
 async def show_books_page(books, update: Update, context: CallbackContext, mes, page: int = 1):
     """Отображение страницы с результатами поиска — с сортировкой и быстрым скачиванием"""
     user_id = str(update.effective_user.id)
-    per_page = db.get_user_preference(user_id, 'books_per_page', config.BOOKS_PER_PAGE_DEFAULT)
+    per_page = await _db_call(db.get_user_preference, user_id, 'books_per_page', config.BOOKS_PER_PAGE_DEFAULT)
     total_books = len(books)
     total_pages = math.ceil(total_books / per_page) if per_page else 1
     
@@ -949,10 +924,13 @@ async def show_books_page(books, update: Update, context: CallbackContext, mes, 
     search_type = context.user_data.get('search_type', 'поиску')
     search_query = context.user_data.get('search_query', '')
     
-    header_text = f"""📚 *Результаты по {search_type}: «{_escape_md(search_query)}»*
-
-Найдено: {total_books} книг  •  Стр. {page}/{total_pages}
-    """
+    shown_from = start_idx + 1 if total_books else 0
+    shown_to = end_idx if total_books else 0
+    body = (
+        f"*Результаты по {search_type}:* «{_escape_md(search_query)}»\n\n"
+        f"Найдено: {total_books}  •  Показаны: {shown_from}-{shown_to}  •  Стр. {page}/{total_pages}"
+    )
+    header_text = _screen("📚 *Поиск книг*", body, _breadcrumbs("🏠 Меню", "📚 Результаты"))
     
     kb = []
 
@@ -966,11 +944,11 @@ async def show_books_page(books, update: Update, context: CallbackContext, mes, 
 
     # Книги с кнопкой быстрого скачивания
     for i, book in enumerate(page_books, start=start_idx + 1):
-        is_fav = db.is_favorite(user_id, book.id)
+        is_fav = await _db_call(db.is_favorite, user_id, book.id)
         star = "⭐" if is_fav else ""
         
-        title = book.title[:30] + "…" if len(book.title) > 30 else book.title
-        author = book.author[:18] + "…" if len(book.author) > 18 else book.author
+        title = _truncate(book.title, 30)
+        author = _truncate(book.author, 18)
         
         text = f"{star}{i}. {title} — {author}"
         row = [
@@ -1018,10 +996,10 @@ async def show_books_page(books, update: Update, context: CallbackContext, mes, 
                 parse_mode=ParseMode.MARKDOWN,
                 reply_markup=reply_markup
             )
-        except Exception:
+        except (BadRequest, Forbidden):
             try:
                 await query.delete_message()
-            except Exception:
+            except (BadRequest, Forbidden):
                 pass
             await context.bot.send_message(
                 chat_id=update.effective_chat.id,
@@ -1035,7 +1013,7 @@ async def show_book_details_with_favorite(book_id: str, update: Update, context:
     """Показать детали книги: аннотация, жанры, форматы, share, author books"""
     user_id = str(update.effective_user.id)
     
-    book = _book_from_cache(book_id)
+    book = await _book_from_cache(book_id)
     
     if not book:
         error_msg = "Книга не найдена"
@@ -1045,23 +1023,25 @@ async def show_book_details_with_favorite(book_id: str, update: Update, context:
             await update.message.reply_text(error_msg)
         return
     
-    is_fav = db.is_favorite(user_id, book_id)
+    is_fav = await _db_call(db.is_favorite, user_id, book_id)
     
     # ── Формируем описание ──
-    capt = f"📖 *{_escape_md(book.title)}*\n✍️ _{_escape_md(book.author)}_\n"
-
-    if book.genres:
-        genres_str = ', '.join(book.genres[:4])
-        capt += f"📂 {_escape_md(genres_str)}\n"
-    if book.series:
-        capt += f"📚 Серия: {_escape_md(book.series)}\n"
+    # Короткая карточка (подробности вынесены в отдельный экран)
+    detail_bits = []
     if book.year:
-        capt += f"📅 Год: {book.year}\n"
+        detail_bits.append(f"📅 {book.year}")
     if book.size:
-        capt += f"📊 Размер: {book.size}\n"
-    if book.rating:
-        capt += f"⭐ Рейтинг: {book.rating}\n"
-    
+        detail_bits.append(f"📊 {book.size}")
+    if book.formats:
+        detail_bits.append(f"📁 {len(book.formats)} форматов")
+
+    compact_info = "  •  ".join(detail_bits)
+    capt = (
+        f"📖 *{_escape_md(book.title)}*\n"
+        f"✍️ _{_escape_md(book.author)}_\n"
+    )
+    if compact_info:
+        capt += f"{compact_info}\n"
     capt += f"\n🔗 [Страница на сайте]({book.link})"
 
     # Аннотация (вставляем в сообщение, а не в caption)
@@ -1086,7 +1066,7 @@ async def show_book_details_with_favorite(book_id: str, update: Update, context:
 
     # Быстрое скачивание (формат по умолчанию)
     if book.formats:
-        default_fmt = db.get_user_preference(user_id, 'default_format', 'fb2')
+        default_fmt = await _db_call(db.get_user_preference, user_id, 'default_format', 'fb2')
         quick_fmt = None
         for fmt_key in book.formats:
             if default_fmt in fmt_key.lower():
@@ -1114,10 +1094,7 @@ async def show_book_details_with_favorite(book_id: str, update: Update, context:
     for i in range(0, len(fmt_buttons), 3):
         kb.append(fmt_buttons[i:i+3])
     
-    # Kindle
-    kindle_email = db.get_user_preference(user_id, 'kindle_email')
-    if kindle_email:
-        kb.append([InlineKeyboardButton("📤 На Kindle", callback_data=f"send_kindle_{book_id}")])
+    kb.append([InlineKeyboardButton("ℹ️ Подробнее о книге", callback_data=f"book_meta_{book_id}")])
 
     # Аннотация (полная)
     if has_full_annotation:
@@ -1126,7 +1103,7 @@ async def show_book_details_with_favorite(book_id: str, update: Update, context:
     # Другие книги автора
     if book.author_link:
         kb.append([InlineKeyboardButton(
-            f"👤 Другие книги: {_escape_md(book.author)[:25]}",
+            f"👤 Другие книги: {_truncate(_escape_md(book.author), 25)}",
             callback_data=f"author_books_{book_id}"
         )])
 
@@ -1148,7 +1125,7 @@ async def show_book_details_with_favorite(book_id: str, update: Update, context:
     # ── Отправляем ──
     if book.cover:
         try:
-            flib.download_book_cover(book)
+            await _flib_call(flib.download_book_cover, book)
             c_full_path = os.path.join(config.BOOKS_DIR, book_id, "cover.jpg")
             if not os.path.exists(c_full_path):
                 raise FileNotFoundError("Cover not found")
@@ -1172,9 +1149,9 @@ async def show_book_details_with_favorite(book_id: str, update: Update, context:
                 if update.callback_query:
                     try:
                         await update.callback_query.delete_message()
-                    except Exception:
+                    except (BadRequest, Forbidden):
                         pass
-        except Exception:
+        except (OSError, BadRequest, Forbidden):
             await _send_or_edit_message(update, context, full_text, reply_markup)
     else:
         await _send_or_edit_message(update, context, full_text, reply_markup)
@@ -1191,10 +1168,10 @@ async def _send_or_edit_message(update: Update, context: CallbackContext, text: 
                 reply_markup=reply_markup,
                 parse_mode=ParseMode.MARKDOWN
             )
-        except Exception:
+        except (BadRequest, Forbidden):
             try:
                 await update.callback_query.delete_message()
-            except Exception:
+            except (BadRequest, Forbidden):
                 pass
             await context.bot.send_message(
                 chat_id=update.effective_chat.id,
@@ -1209,6 +1186,38 @@ async def _send_or_edit_message(update: Update, context: CallbackContext, text: 
             reply_markup=reply_markup,
             parse_mode=ParseMode.MARKDOWN
         )
+
+
+async def show_book_meta(book_id: str, update: Update, context: CallbackContext):
+    """Показать расширенные метаданные книги."""
+    book = await _book_from_cache(book_id)
+    if not book:
+        await update.callback_query.answer("Книга не найдена", show_alert=True)
+        return
+
+    lines = [
+        f"📖 *{_escape_md(book.title)}*",
+        f"✍️ _{_escape_md(book.author)}_",
+    ]
+    if book.genres:
+        lines.append(f"📂 Жанры: {_escape_md(', '.join(book.genres[:8]))}")
+    if book.series:
+        lines.append(f"📚 Серия: {_escape_md(book.series)}")
+    if book.year:
+        lines.append(f"📅 Год: {book.year}")
+    if book.size:
+        lines.append(f"📊 Размер: {book.size}")
+    if book.rating:
+        lines.append(f"⭐ Рейтинг: {book.rating}")
+    lines.append(f"🔗 [Страница на сайте]({book.link})")
+
+    text = _screen(
+        "ℹ️ *Подробности книги*",
+        "\n".join(lines),
+        _breadcrumbs("🏠 Меню", "📖 Книга", "ℹ️ Подробности"),
+    )
+    kb = [[InlineKeyboardButton("◀️ К карточке", callback_data=f"book_{book_id}")]]
+    await _safe_edit_or_send(update.callback_query, context, text, InlineKeyboardMarkup(kb))
 
 
 # ════════════════════════════════════════════════════════════
@@ -1228,15 +1237,21 @@ async def show_favorites(update: Update, context: CallbackContext):
             page = int(callback_data.split("_")[2])
     
     offset = (page - 1) * FAVORITES_PER_PAGE
-    favorites, total = db.get_user_favorites(user_id, offset, FAVORITES_PER_PAGE, tag=tag_filter)
+    favorites, total = await _db_call(
+        db.get_user_favorites, user_id, offset, FAVORITES_PER_PAGE, tag=tag_filter
+    )
     context.user_data['current_favorites_page'] = page
     
     # Получаем количество по полкам
-    tag_counts = db.get_favorites_count_by_tag(user_id)
+    tag_counts = await _db_call(db.get_favorites_count_by_tag, user_id)
     total_all = sum(tag_counts.values())
 
     if not favorites and not total_all:
-        text = "⭐ *Избранное*\n\nУ вас пока нет избранных книг.\n\nДобавляйте книги в избранное для быстрого доступа!"
+        text = _screen(
+            "⭐ *Избранное*",
+            "У вас пока нет избранных книг.\n\nДобавляйте книги в избранное для быстрого доступа!",
+            _breadcrumbs("🏠 Меню", "⭐ Избранное"),
+        )
         keyboard = [[InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
@@ -1250,10 +1265,10 @@ async def show_favorites(update: Update, context: CallbackContext):
 
     # Заголовок
     shelf_name = _shelf_label(tag_filter) if tag_filter else "Все"
-    text = f"⭐ *Избранные книги* — {shelf_name}\n\nВсего: {total} книг"
+    body = f"*Полка:* {shelf_name}\nВсего: {total} книг"
     if total_pages > 1:
-        text += f"  •  Стр. {page}/{total_pages}"
-    text += "\n━━━━━━━━━━━━━━━━━━━━━\n"
+        body += f"  •  Стр. {page}/{total_pages}"
+    text = _screen("⭐ *Избранные книги*", body, _breadcrumbs("🏠 Меню", "⭐ Избранное"))
     
     kb = []
 
@@ -1280,8 +1295,8 @@ async def show_favorites(update: Update, context: CallbackContext):
     # ── Список книг ──
     if favorites:
         for i, fav in enumerate(favorites, start=offset + 1):
-            title = fav['title'][:28] + "…" if len(fav['title']) > 28 else fav['title']
-            author = fav['author'][:18] + "…" if len(fav['author']) > 18 else fav['author']
+            title = _truncate(fav['title'], 28)
+            author = _truncate(fav['author'], 18)
             
             shelf_icon = ""
             if fav.get('tags') and fav['tags'] in config.FAVORITE_SHELVES:
@@ -1325,16 +1340,16 @@ async def toggle_favorite(book_id: str, update: Update, context: CallbackContext
     """Добавить/удалить книгу из избранного"""
     user_id = str(update.effective_user.id)
     
-    book = _book_from_cache(book_id)
+    book = await _book_from_cache(book_id)
     if not book:
         await update.callback_query.answer("Книга не найдена", show_alert=True)
         return
     
-    if db.is_favorite(user_id, book_id):
-        db.remove_from_favorites(user_id, book_id)
+    if await _db_call(db.is_favorite, user_id, book_id):
+        await _db_call(db.remove_from_favorites, user_id, book_id)
         await update.callback_query.answer("✅ Удалено из избранного", show_alert=False)
     else:
-        success = db.add_to_favorites(user_id, book_id, book.title, book.author)
+        success = await _db_call(db.add_to_favorites, user_id, book_id, book.title, book.author)
         if success:
             await update.callback_query.answer("⭐ Добавлено в избранное!", show_alert=False)
         else:
@@ -1348,7 +1363,7 @@ async def show_tag_picker(book_id: str, update: Update, context: CallbackContext
     user_id = str(update.effective_user.id)
 
     # Проверяем, что книга в избранном
-    if not db.is_favorite(user_id, book_id):
+    if not await _db_call(db.is_favorite, user_id, book_id):
         await update.callback_query.answer("Сначала добавьте в избранное", show_alert=True)
         return
 
@@ -1366,7 +1381,7 @@ async def show_tag_picker(book_id: str, update: Update, context: CallbackContext
 async def export_favorites(update: Update, context: CallbackContext):
     """Экспортировать избранное в текстовый файл"""
     user_id = str(update.effective_user.id)
-    favorites = db.get_all_favorites_for_export(user_id)
+    favorites = await _db_call(db.get_all_favorites_for_export, user_id)
 
     if not favorites:
         await update.callback_query.answer("Избранное пусто", show_alert=True)
@@ -1400,7 +1415,7 @@ async def export_favorites(update: Update, context: CallbackContext):
 
 async def show_other_books_by_author(book_id: str, update: Update, context: CallbackContext):
     """Показать другие книги автора"""
-    book = _book_from_cache(book_id)
+    book = await _book_from_cache(book_id)
     if not book or not book.author_link:
         await update.callback_query.answer("Информация об авторе недоступна", show_alert=True)
         return
@@ -1408,10 +1423,15 @@ async def show_other_books_by_author(book_id: str, update: Update, context: Call
     mes_text = f"🔍 Ищу другие книги автора {book.author}..."
     try:
         await update.callback_query.edit_message_text(mes_text)
-    except Exception:
+    except (BadRequest, Forbidden):
         pass
 
-    other_books = flib.get_other_books_by_author(book.author_link, exclude_book_id=book_id, limit=20)
+    other_books = await _flib_call(
+        flib.get_other_books_by_author,
+        book.author_link,
+        exclude_book_id=book_id,
+        limit=20,
+    )
     
     if not other_books:
         text = f"👤 *{_escape_md(book.author)}*\n\nДругих книг не найдено."
@@ -1461,7 +1481,7 @@ async def get_book_by_format(book_id: str, book_format: str, update: Update, con
     )
     
     try:
-        book = _book_from_cache(book_id)
+        book = await _book_from_cache(book_id)
         if not book:
             await context.bot.delete_message(chat_id=mes.chat_id, message_id=mes.message_id)
             await context.bot.send_message(
@@ -1470,10 +1490,10 @@ async def get_book_by_format(book_id: str, book_format: str, update: Update, con
             )
             return
         
-        b_content, b_filename = flib.download_book(book, book_format)
+        b_content, b_filename = await _flib_call(flib.download_book, book, book_format)
         
         if b_content and b_filename:
-            db.add_download(user_id, book_id, book.title, book.author, book_format)
+            await _db_call(db.add_download, user_id, book_id, book.title, book.author, book_format)
             
             await context.bot.send_document(
                 chat_id=update.effective_chat.id, 
@@ -1507,7 +1527,7 @@ async def get_book_by_format(book_id: str, book_format: str, update: Update, con
 async def quick_download(book_id: str, update: Update, context: CallbackContext):
     """Быстрое скачивание в формате по умолчанию"""
     user_id = str(update.effective_user.id)
-    default_fmt = db.get_user_preference(user_id, 'default_format', 'fb2')
+    default_fmt = await _db_call(db.get_user_preference, user_id, 'default_format', 'fb2')
 
     if update.callback_query:
         await update.callback_query.answer(f"⏳ Скачиваю ({default_fmt})...")
@@ -1518,7 +1538,7 @@ async def quick_download(book_id: str, update: Update, context: CallbackContext)
     )
 
     try:
-        book = _book_from_cache(book_id)
+        book = await _book_from_cache(book_id)
         if not book or not book.formats:
             await context.bot.delete_message(chat_id=mes.chat_id, message_id=mes.message_id)
             await context.bot.send_message(
@@ -1536,9 +1556,9 @@ async def quick_download(book_id: str, update: Update, context: CallbackContext)
         if not selected:
             selected = next(iter(book.formats))
 
-        b_content, b_filename = flib.download_book(book, selected)
+        b_content, b_filename = await _flib_call(flib.download_book, book, selected)
         if b_content and b_filename:
-            db.add_download(user_id, book_id, book.title, book.author, selected)
+            await _db_call(db.add_download, user_id, book_id, book.title, book.author, selected)
             await context.bot.send_document(
                 chat_id=update.effective_chat.id,
                 document=b_content,
@@ -1561,92 +1581,6 @@ async def quick_download(book_id: str, update: Update, context: CallbackContext)
         await context.bot.send_message(
             chat_id=update.effective_chat.id,
             text="❌ Ошибка скачивания."
-        )
-
-
-async def send_book_to_kindle(book_id: str, update: Update, context: CallbackContext):
-    """Скачать книгу и отправить на Kindle email (SMTP)"""
-    user_id = str(update.effective_user.id)
-    kindle_email = db.get_user_preference(user_id, 'kindle_email')
-    if not kindle_email:
-        await update.callback_query.answer("Сначала настройте Kindle email: /setkindle", show_alert=True)
-        return
-
-    if update.callback_query:
-        await update.callback_query.answer("⏳ Готовлю книгу для Kindle...")
-
-    mes = await context.bot.send_message(
-        chat_id=update.effective_chat.id,
-        text="⏳ Подождите, готовлю книгу для Kindle..."
-    )
-
-    try:
-        book = _book_from_cache(book_id)
-        if not book:
-            await context.bot.delete_message(chat_id=mes.chat_id, message_id=mes.message_id)
-            await context.bot.send_message(
-                chat_id=update.effective_chat.id,
-                text="❌ Книга не найдена."
-            )
-            return
-
-        # Выбираем формат, совместимый с Kindle
-        preferred_format = db.get_user_preference(user_id, 'default_format', 'epub')
-        selected_format = None
-        for kindle_fmt in config.KINDLE_FORMATS:
-            for fmt_key in book.formats:
-                if kindle_fmt in fmt_key.lower():
-                    selected_format = fmt_key
-                    break
-            if selected_format:
-                break
-
-        if not selected_format:
-            selected_format = next(iter(book.formats.keys()), None)
-
-        if not selected_format:
-            await context.bot.delete_message(chat_id=mes.chat_id, message_id=mes.message_id)
-            await context.bot.send_message(
-                chat_id=update.effective_chat.id,
-                text="❌ Нет доступных форматов."
-            )
-            return
-
-        b_content, b_filename = flib.download_book(book, selected_format)
-        if not b_content or not b_filename:
-            await context.bot.delete_message(chat_id=mes.chat_id, message_id=mes.message_id)
-            await context.bot.send_message(
-                chat_id=update.effective_chat.id,
-                text="❌ Не удалось скачать книгу."
-            )
-            return
-
-        await context.bot.delete_message(chat_id=mes.chat_id, message_id=mes.message_id)
-
-        # Отправляем файл пользователю с инструкцией
-        await context.bot.send_document(
-            chat_id=update.effective_chat.id,
-            document=b_content,
-            filename=b_filename,
-            caption=(
-                f"📤 *Для отправки на Kindle:*\n"
-                f"Перешлите этот файл на `{kindle_email}` "
-                f"через приложение Send to Kindle или email\\.\n\n"
-                f"📖 {_escape_md(book.title)}\n"
-                f"✍️ {_escape_md(book.author)}"
-            ),
-            parse_mode=ParseMode.MARKDOWN,
-        )
-
-    except Exception as e:
-        try:
-            await context.bot.delete_message(chat_id=mes.chat_id, message_id=mes.message_id)
-        except Exception:
-            pass
-        logger.error("Error preparing Kindle file", exc_info=e)
-        await context.bot.send_message(
-            chat_id=update.effective_chat.id,
-            text="❌ Ошибка подготовки файла для Kindle."
         )
 
 
@@ -1686,14 +1620,9 @@ async def button(update: Update, context: CallbackContext) -> None:
                     format_encoded = parts[4]
                     book_format = unquote(format_encoded)
                     await get_book_by_format(book_id, book_format, update, context)
-        except Exception as e:
+        except (ValueError, BadRequest) as e:
             logger.error(f"Error decoding format: {e}", exc_info=e)
             await query.answer("Ошибка при обработке формата", show_alert=True)
-        return
-
-    if data.startswith("send_kindle_"):
-        book_id = data[len("send_kindle_"):]
-        await send_book_to_kindle(book_id, update, context)
         return
 
     if data.startswith("qd_"):
@@ -1705,7 +1634,7 @@ async def button(update: Update, context: CallbackContext) -> None:
         try:
             count = int(data.split("_")[3])
             if count in [5, 10, 20]:
-                db.set_user_preference(user_id, 'books_per_page', count)
+                await _db_call(db.set_user_preference, user_id, 'books_per_page', count)
                 await query.answer(f"✅ Установлено {count} книг на странице", show_alert=False)
                 await show_user_settings(update, context)
         except (ValueError, IndexError):
@@ -1716,7 +1645,7 @@ async def button(update: Update, context: CallbackContext) -> None:
         try:
             format_type = data.split("_")[2].lower()
             if format_type in config.ALL_FORMATS:
-                db.set_user_preference(user_id, 'default_format', format_type)
+                await _db_call(db.set_user_preference, user_id, 'default_format', format_type)
                 await query.answer(f"✅ Формат: {format_type.upper()}", show_alert=False)
                 await show_user_settings(update, context)
         except (ValueError, IndexError):
@@ -1731,7 +1660,7 @@ async def button(update: Update, context: CallbackContext) -> None:
             tag = parts[3]
             if tag == "none":
                 tag = ""
-            db.update_favorite_tags(user_id, book_id, tag)
+            await _db_call(db.update_favorite_tags, user_id, book_id, tag)
             label = _shelf_label(tag) if tag else "без полки"
             await query.answer(f"✅ Полка: {label}", show_alert=False)
             await show_book_details_with_favorite(book_id, update, context)
@@ -1745,9 +1674,13 @@ async def button(update: Update, context: CallbackContext) -> None:
 
     if data.startswith("full_ann_"):
         book_id = data[len("full_ann_"):]
-        book = _book_from_cache(book_id)
+        book = await _book_from_cache(book_id)
         if book and book.annotation:
-            ann_text = f"📝 *Аннотация*\n\n📖 _{_escape_md(book.title)}_\n\n{_escape_md(book.annotation)}"
+            ann_text = _screen(
+                "📝 *Аннотация*",
+                f"📖 _{_escape_md(book.title)}_\n\n{_escape_md(book.annotation)}",
+                _breadcrumbs("🏠 Меню", "📖 Книга", "📝 Аннотация"),
+            )
             if len(ann_text) > 4096:
                 ann_text = ann_text[:4092] + "…"
             kb = [[InlineKeyboardButton("◀️ К книге", callback_data=f"book_{book_id}")]]
@@ -1755,6 +1688,12 @@ async def button(update: Update, context: CallbackContext) -> None:
             await _safe_edit_or_send(query, context, ann_text, InlineKeyboardMarkup(kb))
         else:
             await query.answer("Аннотация недоступна", show_alert=True)
+        return
+
+    if data.startswith("book_meta_"):
+        book_id = data[len("book_meta_"):]
+        await query.answer()
+        await show_book_meta(book_id, update, context)
         return
 
     if data.startswith("author_books_"):
@@ -1819,7 +1758,7 @@ async def button(update: Update, context: CallbackContext) -> None:
 
     # ── Повтор последнего поиска ──
     if data == "repeat_search":
-        last = db.get_last_search(user_id)
+        last = await _db_call(db.get_last_search, user_id)
         if not last:
             await query.answer("Нет предыдущих поисков", show_alert=True)
             return
@@ -1831,7 +1770,7 @@ async def button(update: Update, context: CallbackContext) -> None:
         books = _cache_get(cache_key)
         if books is None:
             if cmd == "author":
-                raw = flib.scrape_books_by_author(q)
+                raw = await _flib_call(flib.scrape_books_by_author, q)
                 if raw:
                     all_b = []
                     for group in raw:
@@ -1844,15 +1783,15 @@ async def button(update: Update, context: CallbackContext) -> None:
                     books = None
             elif cmd == "exact" and '|' in q:
                 t, a = q.split('|', 1)
-                books = flib.scrape_books_mbl(t.strip(), a.strip())
+                books = await _flib_call(flib.scrape_books_mbl, t.strip(), a.strip())
             else:
-                books = flib.scrape_books_by_title(q)
+                books = await _flib_call(flib.scrape_books_by_title, q)
             _cache_set(cache_key, books)
 
         if not books:
             try:
                 await query.edit_message_text(f"😔 По запросу «{q}» ничего не найдено.")
-            except Exception:
+            except (BadRequest, Forbidden):
                 pass
             return
 
@@ -1947,25 +1886,26 @@ async def show_main_menu(update: Update, context: CallbackContext):
     """Показать главное меню (callback version)"""
     user_name = update.effective_user.first_name or "Книголюб"
     user_id = str(update.effective_user.id)
-    context.user_data[_NAV_STACK_KEY] = []
+    _reset_nav(context)
     
-    user_stats = db.get_user_stats(user_id)
+    user_stats = await _db_call(db.get_user_stats, user_id)
     favorites_count = user_stats.get('favorites_count', 0)
     search_count = user_stats.get('user_info', {}).get('search_count', 0)
     download_count = user_stats.get('user_info', {}).get('download_count', 0)
     level = _get_user_level(search_count, download_count)
     
-    text = f"""🏠 *Главное меню*
-
-Привет, {_escape_md(user_name)}!  {level}
-
-📊 Статистика:
-• Поисков: {search_count}
-• Скачиваний: {download_count}
-• В избранном: {favorites_count}
-
-{_next_level_info(search_count, download_count)}
-    """
+    text = _screen(
+        "🏠 *Главное меню*",
+        (
+            f"Привет, {_escape_md(user_name)}!  {level}\n\n"
+            f"📊 Статистика:\n"
+            f"• Поисков: {search_count}\n"
+            f"• Скачиваний: {download_count}\n"
+            f"• В избранном: {favorites_count}\n\n"
+            f"{_next_level_info(search_count, download_count)}"
+        ),
+        _breadcrumbs("🏠 Меню"),
+    )
     
     keyboard = [
         [
@@ -1981,9 +1921,9 @@ async def show_main_menu(update: Update, context: CallbackContext):
         ],
     ]
 
-    last = db.get_last_search(user_id)
+    last = await _db_call(db.get_last_search, user_id)
     if last:
-        q_short = last['query'][:20] + '…' if len(last['query']) > 20 else last['query']
+        q_short = _truncate(last['query'], 20)
         keyboard.append([
             InlineKeyboardButton(f"🔄 Повторить: «{q_short}»", callback_data="repeat_search")
         ])
@@ -1995,24 +1935,23 @@ async def show_main_menu(update: Update, context: CallbackContext):
 
 async def show_search_menu(update: Update, context: CallbackContext):
     """Показать меню поиска"""
-    text = """
-🔍 *Меню поиска*
-
-Выберите способ поиска:
-
-📖 По названию — найти книги по названию
-👤 По автору — все книги автора
-🎯 Точный поиск — название + автор
-🆔 По ID — если знаете номер книги
-
-Используйте команды:
-• `/title название`
-• `/author фамилия`
-• `/exact название | автор`
-• `/id номер`
-
-💡 Или просто отправьте название книги текстом!
-    """
+    text = _screen(
+        "🔍 *Меню поиска*",
+        (
+            "Выберите способ поиска:\n\n"
+            "📖 По названию — найти книги по названию\n"
+            "👤 По автору — все книги автора\n"
+            "🎯 Точный поиск — название + автор\n"
+            "🆔 По ID — если знаете номер книги\n\n"
+            "Используйте команды:\n"
+            "• `/title название`\n"
+            "• `/author фамилия`\n"
+            "• `/exact название | автор`\n"
+            "• `/id номер`\n\n"
+            "💡 Или просто отправьте название книги текстом!"
+        ),
+        _breadcrumbs("🏠 Меню", "🔍 Поиск"),
+    )
     
     keyboard = [
         [
@@ -2029,16 +1968,20 @@ async def show_search_menu(update: Update, context: CallbackContext):
 async def show_user_history(update: Update, context: CallbackContext):
     """Показать историю поиска пользователя"""
     user_id = str(update.effective_user.id)
-    history = db.get_user_search_history(user_id, limit=10)
+    history = await _db_call(db.get_user_search_history, user_id, limit=10)
     
     if not history:
-        text = "📜 *История поиска*\n\nИстория пуста"
+        text = _screen(
+            "📜 *История поиска*",
+            "История пуста",
+            _breadcrumbs("🏠 Меню", "📜 История"),
+        )
     else:
-        text = "📜 *История поиска*\n\n"
+        text = _screen("📜 *История поиска*", "", _breadcrumbs("🏠 Меню", "📜 История")) + "\n\n"
         for item in history:
             timestamp = item['timestamp'][:16]
             command = item['command']
-            q = item['query'][:30] + "…" if len(item['query']) > 30 else item['query']
+            q = _truncate(item['query'], 30)
             results = item['results_count']
             
             text += f"🕐 {timestamp}\n"
@@ -2058,7 +2001,7 @@ async def show_user_history(update: Update, context: CallbackContext):
 async def show_user_statistics(update: Update, context: CallbackContext):
     """Показать статистику пользователя с уровнем достижений"""
     user_id = str(update.effective_user.id)
-    stats = db.get_user_stats(user_id)
+    stats = await _db_call(db.get_user_stats, user_id)
     
     user_info = stats.get('user_info', {})
     favorites_count = stats.get('favorites_count', 0)
@@ -2068,21 +2011,21 @@ async def show_user_statistics(update: Update, context: CallbackContext):
     level = _get_user_level(search_count, download_count)
     next_info = _next_level_info(search_count, download_count)
     
-    text = f"""📊 *Ваша статистика*
-
-🏆 Уровень: *{level}*
-_{next_info}_
-
-📅 Регистрация: {user_info.get('first_seen', 'Неизвестно')[:10]}
-📅 Активность: {user_info.get('last_seen', 'Неизвестно')[:16]}
-
-📈 *Активность:*
-• Поисков: {search_count}
-• Скачиваний: {download_count}
-• В избранном: {favorites_count}
-
-👤 *Любимые авторы:*
-"""
+    text = _screen(
+        "📊 *Ваша статистика*",
+        (
+            f"🏆 Уровень: *{level}*\n"
+            f"_{next_info}_\n\n"
+            f"📅 Регистрация: {user_info.get('first_seen', 'Неизвестно')[:10]}\n"
+            f"📅 Активность: {user_info.get('last_seen', 'Неизвестно')[:16]}\n\n"
+            f"📈 *Активность:*\n"
+            f"• Поисков: {search_count}\n"
+            f"• Скачиваний: {download_count}\n"
+            f"• В избранном: {favorites_count}\n\n"
+            "👤 *Любимые авторы:*\n"
+        ),
+        _breadcrumbs("🏠 Меню", "📊 Статистика"),
+    )
     
     if favorite_authors:
         for i, author in enumerate(favorite_authors[:5], 1):
@@ -2111,18 +2054,18 @@ async def show_user_settings(update: Update, context: CallbackContext):
     """Показать настройки пользователя"""
     user_id = str(update.effective_user.id)
     
-    books_per_page = db.get_user_preference(user_id, 'books_per_page', config.BOOKS_PER_PAGE_DEFAULT)
-    default_format = db.get_user_preference(user_id, 'default_format', 'fb2')
-    kindle_email = db.get_user_preference(user_id, 'kindle_email', 'не задано')
+    books_per_page = await _db_call(db.get_user_preference, user_id, 'books_per_page', config.BOOKS_PER_PAGE_DEFAULT)
+    default_format = await _db_call(db.get_user_preference, user_id, 'default_format', 'fb2')
     
-    text = f"""⚙️ *Настройки*
-
-📄 Книг на странице: {books_per_page}
-📁 Формат по умолчанию: {default_format}
-📧 Kindle email: {kindle_email}
-
-_Настройки сохраняются автоматически_
-    """
+    text = _screen(
+        "⚙️ *Настройки*",
+        (
+            f"📄 Книг на странице: {books_per_page}\n"
+            f"📁 Формат по умолчанию: {default_format}\n\n"
+            "_Настройки сохраняются автоматически_"
+        ),
+        _breadcrumbs("🏠 Меню", "⚙️ Настройки"),
+    )
     
     keyboard = [
         [
@@ -2162,16 +2105,24 @@ async def favorites_command(update: Update, context: CallbackContext):
 async def history_command(update: Update, context: CallbackContext):
     """Команда для показа истории"""
     user_id = str(update.effective_user.id)
-    history = db.get_user_search_history(user_id, limit=15)
+    history = await _db_call(db.get_user_search_history, user_id, limit=15)
     
     if not history:
-        text = "📜 *История поиска*\n\nИстория пуста\n\nНачните поиск с команд:\n• /title\n• /author\n• /exact"
+        text = _screen(
+            "📜 *История поиска*",
+            "История пуста\n\nНачните поиск с команд:\n• /title\n• /author\n• /exact",
+            _breadcrumbs("🏠 Меню", "📜 История"),
+        )
     else:
-        text = "📜 *История поиска (последние 15)*\n\n"
+        text = _screen(
+            "📜 *История поиска (последние 15)*",
+            "",
+            _breadcrumbs("🏠 Меню", "📜 История"),
+        ) + "\n\n"
         for item in history:
             timestamp = item['timestamp'][:16]
             command = item['command']
-            q = item['query'][:30] + "…" if len(item['query']) > 30 else item['query']
+            q = _truncate(item['query'], 30)
             results = item['results_count']
             
             text += f"🕐 {timestamp}\n"
@@ -2184,16 +2135,24 @@ async def history_command(update: Update, context: CallbackContext):
 async def downloads_command(update: Update, context: CallbackContext):
     """Команда для показа истории скачиваний"""
     user_id = str(update.effective_user.id)
-    downloads = db.get_user_downloads(user_id, limit=15)
+    downloads = await _db_call(db.get_user_downloads, user_id, limit=15)
     
     if not downloads:
-        text = "📥 *История скачиваний*\n\nПока пусто"
+        text = _screen(
+            "📥 *История скачиваний*",
+            "Пока пусто",
+            _breadcrumbs("🏠 Меню", "📥 Скачивания"),
+        )
     else:
-        text = "📥 *История скачиваний (последние 15)*\n\n"
+        text = _screen(
+            "📥 *История скачиваний (последние 15)*",
+            "",
+            _breadcrumbs("🏠 Меню", "📥 Скачивания"),
+        ) + "\n\n"
         for item in downloads:
             timestamp = item['download_date'][:16]
-            title = item['title'][:30] + "…" if len(item['title']) > 30 else item['title']
-            author = item['author'][:20] + "…" if len(item['author']) > 20 else item['author']
+            title = _truncate(item['title'], 30)
+            author = _truncate(item['author'], 20)
             format_type = item['format']
             
             text += f"🕐 {timestamp}\n"
@@ -2208,7 +2167,7 @@ async def downloads_command(update: Update, context: CallbackContext):
 async def mystats_command(update: Update, context: CallbackContext):
     """Команда для показа личной статистики"""
     user_id = str(update.effective_user.id)
-    stats = db.get_user_stats(user_id)
+    stats = await _db_call(db.get_user_stats, user_id)
     
     user_info = stats.get('user_info', {})
     favorites_count = stats.get('favorites_count', 0)
@@ -2260,28 +2219,24 @@ async def settings_command(update: Update, context: CallbackContext):
     """Команда для показа настроек"""
     user_id = str(update.effective_user.id)
     
-    books_per_page = db.get_user_preference(user_id, 'books_per_page', config.BOOKS_PER_PAGE_DEFAULT)
-    default_format = db.get_user_preference(user_id, 'default_format', 'fb2')
-    kindle_email = db.get_user_preference(user_id, 'kindle_email', 'не задано')
+    books_per_page = await _db_call(db.get_user_preference, user_id, 'books_per_page', config.BOOKS_PER_PAGE_DEFAULT)
+    default_format = await _db_call(db.get_user_preference, user_id, 'default_format', 'fb2')
     
-    text = f"""⚙️ *Настройки*
-
-*Текущие параметры:*
-📄 Книг на странице: `{books_per_page}`
-📁 Формат по умолчанию: `{default_format}`
-📧 Kindle email: `{kindle_email}`
-
-*Команды для изменения:*
-• `/setpage [5|10|20]` — книг на странице
-• `/setformat [fb2|epub|mobi|pdf]` — формат по умолчанию
-• `/setkindle email@kindle.com` — email Kindle
-• `/clearkindle` — удалить email Kindle
-
-*Примеры:*
-`/setpage 20`
-`/setformat epub`
-`/setkindle name@kindle.com`
-    """
+    text = _screen(
+        "⚙️ *Настройки*",
+        (
+            "*Текущие параметры:*\n"
+            f"📄 Книг на странице: `{books_per_page}`\n"
+            f"📁 Формат по умолчанию: `{default_format}`\n\n"
+            "*Команды для изменения:*\n"
+            "• `/setpage [5|10|20]` — книг на странице\n"
+            "• `/setformat [fb2|epub|mobi|pdf]` — формат по умолчанию\n\n"
+            "*Примеры:*\n"
+            "`/setpage 20`\n"
+            "`/setformat epub`"
+        ),
+        _breadcrumbs("🏠 Меню", "⚙️ Настройки"),
+    )
     
     await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
 
@@ -2305,7 +2260,7 @@ async def setpage_command(update: Update, context: CallbackContext):
         if count not in [5, 10, 20]:
             raise ValueError
         
-        db.set_user_preference(user_id, 'books_per_page', count)
+        await _db_call(db.set_user_preference, user_id, 'books_per_page', count)
         
         await update.message.reply_text(f"✅ Установлено {count} книг на странице")
     except ValueError:
@@ -2331,35 +2286,8 @@ async def setformat_command(update: Update, context: CallbackContext):
         await update.message.reply_text("❌ Некорректный формат. Используйте: fb2, epub, mobi, pdf, djvu")
         return
     
-    db.set_user_preference(user_id, 'default_format', format_type)
+    await _db_call(db.set_user_preference, user_id, 'default_format', format_type)
     await update.message.reply_text(f"✅ Формат по умолчанию: {format_type.upper()}")
-
-
-@check_access
-async def setkindle_command(update: Update, context: CallbackContext):
-    """Установить email для отправки на Kindle"""
-    user_id = str(update.effective_user.id)
-    if not context.args:
-        await update.message.reply_text(
-            "❌ Укажите email Kindle\n"
-            "Пример: `/setkindle name@kindle.com`",
-            parse_mode=ParseMode.MARKDOWN
-        )
-        return
-    email = context.args[0].strip().lower()
-    if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email):
-        await update.message.reply_text("❌ Некорректный email")
-        return
-    db.set_user_preference(user_id, 'kindle_email', email)
-    await update.message.reply_text(f"✅ Kindle email установлен: {email}")
-
-
-@check_access
-async def clearkindle_command(update: Update, context: CallbackContext):
-    """Удалить email Kindle"""
-    user_id = str(update.effective_user.id)
-    db.set_user_preference(user_id, 'kindle_email', '')
-    await update.message.reply_text("✅ Kindle email удалён")
 
 
 # ════════════════════════════════════════════════════════════
@@ -2372,7 +2300,7 @@ async def show_stats(update: Update, _: CallbackContext) -> None:
     user_id = str(update.effective_user.id)
     
     if ALLOWED_USERS and user_id == ALLOWED_USERS[0]:
-        stats = db.get_global_stats()
+        stats = await _db_call(db.get_global_stats)
         
         stats_text = f"""📊 *Общая статистика бота*
 
@@ -2417,7 +2345,7 @@ async def list_allowed_users(update: Update, _: CallbackContext) -> None:
         if ALLOWED_USERS:
             users_info = []
             for uid in ALLOWED_USERS:
-                user_data = db.get_user(uid)
+                user_data = await _db_call(db.get_user, uid)
                 if user_data:
                     users_info.append(f"• {uid} — {_escape_md(user_data.get('full_name', 'Неизвестно'))}")
                 else:
@@ -2441,8 +2369,8 @@ async def list_allowed_users(update: Update, _: CallbackContext) -> None:
 
 async def cleanup_job(context: CallbackContext):
     """Задача для очистки старых данных"""
-    db.cleanup_old_data(days=30)
-    flib.cleanup_old_files(days=30)
+    await _db_call(db.cleanup_old_data, days=30)
+    await _flib_call(flib.cleanup_old_files, days=30)
     logger.info("Database cleanup completed")
 
 
@@ -2456,7 +2384,7 @@ async def app_error_handler(update: object, context: CallbackContext) -> None:
             await update.effective_message.reply_text(
                 "⚠️ Произошла ошибка. Попробуйте позже."
             )
-        except Exception:
+        except (BadRequest, Forbidden):
             pass
 
 
@@ -2479,7 +2407,7 @@ async def inline_query(update: Update, context: CallbackContext) -> None:
     cache_key = f"inline:{query}"
     books = _cache_get(cache_key)
     if books is None:
-        books = flib.scrape_books_by_title(query) or []
+        books = await _flib_call(flib.scrape_books_by_title, query) or []
         _cache_set(cache_key, books)
 
     bot_username = context.bot.username or "bot"

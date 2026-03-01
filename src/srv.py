@@ -33,8 +33,6 @@ from src.tg_bot import (
     settings_command,
     setpage_command,
     setformat_command,
-    setkindle_command,
-    clearkindle_command,
     cleanup_job,
     app_error_handler,
     inline_query,
@@ -55,7 +53,7 @@ def main():
         print("[INFO ] Добавьте строку: TOKEN=your_bot_token_here")
         return
 
-    print(f"[KEY ] Токен: {token[:10]}...{token[-5:]}")
+    print("[KEY ] Токен загружен из окружения")
 
     # Настройка HTTPXRequest с увеличенными таймаутами
     proxy_url = os.getenv("TELEGRAM_PROXY")
@@ -103,8 +101,6 @@ def main():
     # ===== НАСТРОЙКИ =====
     app.add_handler(CommandHandler("setpage", setpage_command))
     app.add_handler(CommandHandler("setformat", setformat_command))
-    app.add_handler(CommandHandler("setkindle", setkindle_command))
-    app.add_handler(CommandHandler("clearkindle", clearkindle_command))
 
     # ===== АДМИНИСТРАТИВНЫЕ КОМАНДЫ =====
     app.add_handler(CommandHandler("users", list_allowed_users))
