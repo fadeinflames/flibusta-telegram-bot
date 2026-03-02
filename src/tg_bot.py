@@ -16,6 +16,7 @@ from src import flib
 from src import database as db
 from src import config
 from src.custom_logging import get_logger
+from src.tg_bot_cache import TTLCache
 from src.tg_bot_nav import (
     pop_nav as _pop_nav,
     push_nav as _push_nav,
@@ -36,7 +37,10 @@ logger = get_logger(__name__)
 # ────────────────────── Caches & state ──────────────────────
 
 # In-memory search cache: key -> (timestamp, value)
-_SEARCH_CACHE: "dict[str, tuple[float, object]]" = {}
+_SEARCH_CACHE = TTLCache(
+    ttl_sec=config.SEARCH_CACHE_TTL_SEC,
+    max_size=config.SEARCH_CACHE_MAX_SIZE,
+)
 
 # Получаем список разрешенных пользователей из переменной окружения
 ALLOWED_USERS = os.getenv('ALLOWED_USERS', '').split(',')
@@ -49,21 +53,11 @@ FAVORITES_PER_PAGE = config.FAVORITES_PER_PAGE_DEFAULT
 # ────────────────────── Helpers ──────────────────────
 
 def _cache_get(key: str):
-    item = _SEARCH_CACHE.get(key)
-    if not item:
-        return None
-    ts, value = item
-    if time.time() - ts > config.SEARCH_CACHE_TTL_SEC:
-        _SEARCH_CACHE.pop(key, None)
-        return None
-    return value
+    return _SEARCH_CACHE.get(key)
 
 
 def _cache_set(key: str, value):
-    _SEARCH_CACHE[key] = (time.time(), value)
-    if len(_SEARCH_CACHE) > config.SEARCH_CACHE_MAX_SIZE:
-        oldest_key = sorted(_SEARCH_CACHE.items(), key=lambda x: x[1][0])[0][0]
-        _SEARCH_CACHE.pop(oldest_key, None)
+    _SEARCH_CACHE.set(key, value)
 
 
 def _inc_error_stat(context: CallbackContext, error: Exception):
@@ -402,7 +396,10 @@ async def start_callback(update: Update, context: CallbackContext):
                     else:
                         await update.message.reply_text(f"😔 Книга с ID {book_id} не найдена.")
                 except Exception:
-                    await context.bot.delete_message(chat_id=mes.chat_id, message_id=mes.message_id)
+                    try:
+                        await context.bot.delete_message(chat_id=mes.chat_id, message_id=mes.message_id)
+                    except (BadRequest, Forbidden):
+                        pass
                     await update.message.reply_text("❌ Ошибка при загрузке книги.")
                 return
 
@@ -880,7 +877,7 @@ async def handle_error(error, update: Update, context: CallbackContext, mes):
     """Обработка ошибок"""
     try:
         await context.bot.delete_message(chat_id=mes.chat_id, message_id=mes.message_id)
-    except Exception:
+    except (BadRequest, Forbidden):
         pass
     
     try:
@@ -888,7 +885,7 @@ async def handle_error(error, update: Update, context: CallbackContext, mes):
             "❌ Произошла ошибка при выполнении запроса.\n"
             "Попробуйте позже или используйте другую команду."
         )
-    except Exception:
+    except (BadRequest, Forbidden):
         pass
     
     _inc_error_stat(context, error)
@@ -924,21 +921,20 @@ async def show_books_page(books, update: Update, context: CallbackContext, mes, 
     search_type = context.user_data.get('search_type', 'поиску')
     search_query = context.user_data.get('search_query', '')
     
-    shown_from = start_idx + 1 if total_books else 0
-    shown_to = end_idx if total_books else 0
-    body = (
-        f"*Результаты по {search_type}:* «{_escape_md(search_query)}»\n\n"
-        f"Найдено: {total_books}  •  Показаны: {shown_from}-{shown_to}  •  Стр. {page}/{total_pages}"
-    )
-    header_text = _screen("📚 *Поиск книг*", body, _breadcrumbs("🏠 Меню", "📚 Результаты"))
+    query_text = f"«{_escape_md(search_query)}»" if search_query else "—"
+    header_text = f"📚 *Поиск книг*\n\nРезультаты по {search_type}: {query_text}\n"
+    stats = [f"Найдено: {total_books}"]
+    if total_pages > 1:
+        stats.append(f"Стр. {page}/{total_pages}")
+    header_text += "\n" + "  •  ".join(stats)
     
     kb = []
 
     # Кнопки сортировки (компактные)
     sort_row = [
-        InlineKeyboardButton("🔤 Название", callback_data="sort_title"),
-        InlineKeyboardButton("👤 Автор", callback_data="sort_author"),
-        InlineKeyboardButton("↩️ Исходный", callback_data="sort_default"),
+        InlineKeyboardButton("А-Я", callback_data="sort_title"),
+        InlineKeyboardButton("👤", callback_data="sort_author"),
+        InlineKeyboardButton("↺", callback_data="sort_default"),
     ]
     kb.append(sort_row)
 
@@ -947,13 +943,13 @@ async def show_books_page(books, update: Update, context: CallbackContext, mes, 
         is_fav = await _db_call(db.is_favorite, user_id, book.id)
         star = "⭐" if is_fav else ""
         
-        title = _truncate(book.title, 30)
-        author = _truncate(book.author, 18)
+        title = _truncate(book.title, 26)
+        author = _truncate(book.author, 14)
         
-        text = f"{star}{i}. {title} — {author}"
+        text = f"{star}{i}. {title} · {author}"
         row = [
             InlineKeyboardButton(text, callback_data=f"book_{book.id}"),
-            InlineKeyboardButton("⚡", callback_data=f"qd_{book.id}"),
+            InlineKeyboardButton("⬇️", callback_data=f"qd_{book.id}"),
         ]
         kb.append(row)
     

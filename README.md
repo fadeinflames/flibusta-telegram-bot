@@ -29,6 +29,7 @@ Telegram-бот для поиска книг на Flibusta и скачивани
 - `src/tg_bot_presentation.py` — форматирование текста/уровней.
 - `src/tg_bot_ui.py` — UI-хелперы (breadcrumbs, screen, truncate).
 - `src/tg_bot_nav.py` — навигационный стек.
+- `src/tg_bot_cache.py` — in-memory TTL/LRU-кэш поиска.
 
 ## Быстрый старт (локально)
 

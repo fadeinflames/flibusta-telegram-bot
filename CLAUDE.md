@@ -16,6 +16,7 @@ src/
 ├── tg_bot_presentation.py — Вспомогательные функции форматирования (Markdown, уровни, полки).
 ├── tg_bot_ui.py    — UI-хелперы экранов (breadcrumbs, screen, truncate).
 ├── tg_bot_nav.py   — Управление навигационным стеком.
+├── tg_bot_cache.py — In-memory TTL/LRU-кэш для результатов поиска.
 └── custom_logging.py — JSON-логирование с RotatingFileHandler (10 МБ × 5 файлов).
 ```
 
