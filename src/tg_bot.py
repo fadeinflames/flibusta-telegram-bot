@@ -933,7 +933,7 @@ async def show_books_page(books, update: Update, context: CallbackContext, mes, 
     # Кнопки сортировки (компактные)
     sort_row = [
         InlineKeyboardButton("А-Я", callback_data="sort_title"),
-        InlineKeyboardButton("👤", callback_data="sort_author"),
+        InlineKeyboardButton("Авторы", callback_data="sort_author"),
         InlineKeyboardButton("↺", callback_data="sort_default"),
     ]
     kb.append(sort_row)
@@ -943,15 +943,13 @@ async def show_books_page(books, update: Update, context: CallbackContext, mes, 
         is_fav = await _db_call(db.is_favorite, user_id, book.id)
         star = "⭐" if is_fav else ""
         
-        title = _truncate(book.title, 26)
-        author = _truncate(book.author, 14)
-        
-        text = f"{star}{i}. {title} · {author}"
-        row = [
-            InlineKeyboardButton(text, callback_data=f"book_{book.id}"),
-            InlineKeyboardButton("⬇️", callback_data=f"qd_{book.id}"),
-        ]
-        kb.append(row)
+        title = _truncate(book.title, 64)
+        author = _truncate(book.author, 20)
+
+        text = f"{star}{i}. {title}"
+        if author:
+            text += f" · {author}"
+        kb.append([InlineKeyboardButton(text, callback_data=f"book_{book.id}")])
     
     # Навигация
     nav_buttons = []
