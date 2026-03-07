@@ -3,7 +3,7 @@ import os
 import io
 import time
 import math
-from urllib.parse import quote, unquote
+from urllib.parse import unquote
 from functools import wraps
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -933,7 +933,7 @@ async def show_books_page(books, update: Update, context: CallbackContext, mes, 
     # Кнопки сортировки (компактные)
     sort_row = [
         InlineKeyboardButton("А-Я", callback_data="sort_title"),
-        InlineKeyboardButton("Авторы", callback_data="sort_author"),
+        InlineKeyboardButton("👤", callback_data="sort_author"),
         InlineKeyboardButton("↺", callback_data="sort_default"),
     ]
     kb.append(sort_row)
@@ -943,13 +943,15 @@ async def show_books_page(books, update: Update, context: CallbackContext, mes, 
         is_fav = await _db_call(db.is_favorite, user_id, book.id)
         star = "⭐" if is_fav else ""
         
-        title = _truncate(book.title, 64)
-        author = _truncate(book.author, 20)
-
-        text = f"{star}{i}. {title}"
-        if author:
-            text += f" · {author}"
-        kb.append([InlineKeyboardButton(text, callback_data=f"book_{book.id}")])
+        title = _truncate(book.title, 26)
+        author = _truncate(book.author, 14)
+        
+        text = f"{star}{i}. {title} · {author}"
+        row = [
+            InlineKeyboardButton(text, callback_data=f"book_{book.id}"),
+            InlineKeyboardButton("⬇️", callback_data=f"qd_{book.id}"),
+        ]
+        kb.append(row)
     
     # Навигация
     nav_buttons = []
@@ -1060,29 +1062,34 @@ async def show_book_details_with_favorite(book_id: str, update: Update, context:
 
     # Быстрое скачивание (формат по умолчанию)
     if book.formats:
+        format_keys = list(book.formats.keys())
+        context.user_data.setdefault("book_format_map", {})[book_id] = format_keys
+
         default_fmt = await _db_call(db.get_user_preference, user_id, 'default_format', 'fb2')
         quick_fmt = None
-        for fmt_key in book.formats:
+        for fmt_key in format_keys:
             if default_fmt in fmt_key.lower():
                 quick_fmt = fmt_key
                 break
         if not quick_fmt:
-            quick_fmt = next(iter(book.formats))
+            quick_fmt = next(iter(format_keys), None)
+        if not quick_fmt:
+            quick_fmt = default_fmt
+
+        quick_idx = format_keys.index(quick_fmt) if quick_fmt in format_keys else 0
         quick_label = quick_fmt.strip('()') if quick_fmt else default_fmt
-        format_encoded = quote(quick_fmt, safe="")
         kb.append([InlineKeyboardButton(
             f"⚡ Скачать быстро ({quick_label})",
-            callback_data=f"get_book_by_format_{book_id}|{format_encoded}"
+            callback_data=f"fmt_{book_id}_{quick_idx}"
         )])
 
     # Горизонтальные кнопки форматов (по 2–3 в ряд)
     fmt_buttons = []
-    for b_format in book.formats:
+    for idx, b_format in enumerate(book.formats):
         short_name = b_format.strip('() ').upper()
-        format_encoded = quote(b_format, safe="")
         fmt_buttons.append(InlineKeyboardButton(
             f"📥 {short_name}",
-            callback_data=f"get_book_by_format_{book_id}|{format_encoded}"
+            callback_data=f"fmt_{book_id}_{idx}"
         ))
     # Группируем по 3 в ряд
     for i in range(0, len(fmt_buttons), 3):
@@ -1617,6 +1624,20 @@ async def button(update: Update, context: CallbackContext) -> None:
         except (ValueError, BadRequest) as e:
             logger.error(f"Error decoding format: {e}", exc_info=e)
             await query.answer("Ошибка при обработке формата", show_alert=True)
+        return
+
+    if data.startswith("fmt_"):
+        try:
+            _, book_id, idx_str = data.split("_", 2)
+            fmt_idx = int(idx_str)
+            fmt_map = context.user_data.get("book_format_map", {})
+            book_formats = fmt_map.get(book_id) or []
+            if 0 <= fmt_idx < len(book_formats):
+                await get_book_by_format(book_id, book_formats[fmt_idx], update, context)
+            else:
+                await query.answer("Формат устарел. Откройте карточку книги заново.", show_alert=True)
+        except (ValueError, IndexError):
+            await query.answer("Ошибка выбора формата", show_alert=True)
         return
 
     if data.startswith("qd_"):
