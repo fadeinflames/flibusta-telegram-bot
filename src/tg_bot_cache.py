@@ -1,6 +1,6 @@
 import time
 from collections import OrderedDict
-from typing import Callable
+from collections.abc import Callable
 
 
 class TTLCache:

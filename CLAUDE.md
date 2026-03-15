@@ -8,16 +8,21 @@ Telegram-бот для поиска и скачивания книг с сайт
 
 ```
 src/
-├── srv.py          — Точка входа. Загружает .env, инициализирует БД, регистрирует хэндлеры, запускает polling.
-├── config.py       — Все константы и настройки (сайт, таймауты, пагинация, уровни достижений, полки).
-├── flib.py         — Скрапинг Flibusta: поиск книг, получение деталей, скачивание файлов/обложек.
-├── database.py     — SQLite через sqlite3 (синхронный). Пользователи, история, избранное, скачивания, кэш книг.
-├── tg_bot.py       — Логика бота: команды, callback-обработчик, UI, пагинация, навигация.
-├── tg_bot_presentation.py — Вспомогательные функции форматирования (Markdown, уровни, полки).
-├── tg_bot_ui.py    — UI-хелперы экранов (breadcrumbs, screen, truncate).
-├── tg_bot_nav.py   — Управление навигационным стеком.
-├── tg_bot_cache.py — In-memory TTL/LRU-кэш для результатов поиска.
-└── custom_logging.py — JSON-логирование с RotatingFileHandler (10 МБ × 5 файлов).
+├── srv.py              — Точка входа. Загружает .env, инициализирует БД, регистрирует хэндлеры, запускает polling.
+├── config.py           — Все константы и настройки (сайт, таймауты, пагинация, уровни достижений, полки).
+├── flib.py             — Скрапинг Flibusta: поиск книг, получение деталей, скачивание файлов/обложек.
+├── database.py         — SQLite через sqlite3 (синхронный). Пользователи, история, избранное, скачивания, кэш книг.
+├── tg_bot.py           — Главный модуль бота: callback-роутер, текстовые команды, admin, inline, jobs.
+├── tg_bot_helpers.py   — Общие утилиты: декораторы, кэш, async-обёртки, обработка ошибок.
+├── tg_bot_views.py     — Функции отображения экранов (результаты, карточка книги, меню и др.).
+├── tg_bot_search.py    — Хэндлеры поисковых команд (/title, /author, /exact, /id, текстовый поиск).
+├── tg_bot_favorites.py — Управление избранным: отображение, toggle, полки, экспорт, книги автора.
+├── tg_bot_download.py  — Скачивание книг: по формату и быстрое скачивание.
+├── tg_bot_presentation.py — Форматирование (Markdown, уровни, полки).
+├── tg_bot_ui.py        — UI-хелперы экранов (breadcrumbs, screen, truncate).
+├── tg_bot_nav.py       — Управление навигационным стеком.
+├── tg_bot_cache.py     — In-memory TTL/LRU-кэш для результатов поиска.
+└── custom_logging.py   — JSON-логирование с RotatingFileHandler (10 МБ × 5 файлов).
 ```
 
 ## Ключевые архитектурные решения
@@ -52,7 +57,7 @@ src/
 
 ### Скрапинг (`src/flib.py`)
 
-- Глобальный `requests.Session` с retry-стратегией (3 попытки, backoff 1.0 сек, статусы 429/5xx).
+- Per-thread `requests.Session` через `threading.local()` с retry-стратегией (3 попытки, backoff 1.0 сек, статусы 429/5xx). Потокобезопасно при вызовах через `asyncio.to_thread`.
 - In-memory LRU-кэш страниц (`_PAGE_CACHE`, OrderedDict, TTL 300 сек, макс. 128 записей).
 - `Book` — dataclass с полями: `id`, `title`, `author`, `link`, `formats` (dict), `cover`, `size`, `series`, `year`, `annotation`, `genres` (list), `rating`, `author_link`.
 - `formats` — dict, где ключ = текстовое представление формата (например `"(fb2)"`), значение = URL для скачивания.
@@ -71,7 +76,15 @@ src/
 - `scrape_books_by_author` возвращает `list[list[Book]]` (список авторов → список книг каждого).
 - `get_book_by_id` парсит аннотацию тремя способами (заголовок "Аннотация", div.content, все `<p>`), жанры через `/g/`, серию через `/sequence/`.
 
-### Бот (`src/tg_bot.py`)
+### Бот (модули `src/tg_bot*.py`)
+
+Основная логика разделена на модули:
+- `tg_bot_helpers.py` — декораторы (`check_access`, `rate_limit`, `check_callback_access`), кэш, `db_call`/`flib_call`, `perform_title_search`.
+- `tg_bot_views.py` — все функции отображения (`show_books_page`, `show_book_details_with_favorite`, `show_main_menu`, и др.). Использует `are_favorites` для batch-проверки избранного (вместо N+1 запросов).
+- `tg_bot_search.py` — хэндлеры поисковых команд. Общая логика поиска по названию с fallback вынесена в `perform_title_search`.
+- `tg_bot_favorites.py` — управление избранным.
+- `tg_bot_download.py` — скачивание книг (стриминг через `io.BytesIO`).
+- `tg_bot.py` — callback-роутер `button()`, текстовые команды, admin, inline, jobs. Реэкспортирует всё для `srv.py`.
 
 #### Контроль доступа
 
@@ -196,6 +209,24 @@ src/
 | `/users` | Список пользователей (админ) |
 | `/stats` | Общая статистика (админ) |
 
+## Тесты и инструменты разработки
+
+```bash
+make test       # pytest tests/ -v
+make lint       # ruff check + format --check
+make format     # ruff format + check --fix
+```
+
+Тесты находятся в `tests/`:
+- `conftest.py` — фикстуры: изолированная SQLite БД через `tmp_path`.
+- `test_database.py` — юнит-тесты всех функций `database.py`.
+- `test_flib.py` — тесты парсинга HTML и скачивания (моки, HTML-фикстуры).
+- `test_tg_bot_presentation.py` — форматирование, уровни, полки.
+- `test_tg_bot_cache.py` — TTL/LRU-кэш.
+- `test_tg_bot_ui_nav.py` — UI-хелперы и навигация.
+
+CI (``.github/workflows/ci.yml``): lint → test → docker build.
+
 ## Зависимости
 
 - `python-telegram-bot[job-queue]` ^21.9 — Telegram Bot API
@@ -203,3 +234,9 @@ src/
 - `requests` — HTTP-клиент для Flibusta
 - `beautifulsoup4` + `lxml` — парсинг HTML
 - `json-log-formatter` — JSON-логирование
+
+### Dev-зависимости
+
+- `pytest` ^8.0 — тесты
+- `pytest-asyncio` ^0.24 — async-тесты
+- `ruff` ^0.9 — линтер и форматтер

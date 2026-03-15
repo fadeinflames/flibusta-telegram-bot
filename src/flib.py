@@ -1,5 +1,7 @@
+import io
 import os
 import re
+import threading
 import time
 import urllib.parse
 from collections import OrderedDict
@@ -14,8 +16,11 @@ from src import config
 from src.custom_logging import get_logger
 
 logger = get_logger(__name__)
-SESSION = requests.Session()
-SESSION.headers.update({"User-Agent": config.USER_AGENT})
+
+
+# ────────────────────── Thread-safe session ──────────────────────
+
+_thread_local = threading.local()
 
 
 def _fix_redirect_location(location: str) -> str | None:
@@ -45,17 +50,32 @@ class RedirectFixAdapter(HTTPAdapter):
         return response
 
 
-# Автоматические ретраи при сетевых ошибках и ошибках сервера
-_retry_strategy = Retry(
-    total=config.REQUEST_MAX_RETRIES,
-    backoff_factor=config.REQUEST_RETRY_BACKOFF,
-    status_forcelist=[429, 500, 502, 503, 504],
-    allowed_methods=["GET"],
-)
-_adapter = RedirectFixAdapter(max_retries=_retry_strategy)
-SESSION.mount("http://", _adapter)
-SESSION.mount("https://", _adapter)
+def _get_session() -> requests.Session:
+    """Возвращает per-thread сессию с retry-стратегией."""
+    session = getattr(_thread_local, "session", None)
+    if session is not None:
+        return session
 
+    session = requests.Session()
+    session.headers.update({"User-Agent": config.USER_AGENT})
+
+    retry_strategy = Retry(
+        total=config.REQUEST_MAX_RETRIES,
+        backoff_factor=config.REQUEST_RETRY_BACKOFF,
+        status_forcelist=[429, 500, 502, 503, 504],
+        allowed_methods=["GET"],
+    )
+    adapter = RedirectFixAdapter(max_retries=retry_strategy)
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
+
+    _thread_local.session = session
+    return session
+
+
+# ────────────────────── Page cache ──────────────────────
+
+_page_cache_lock = threading.Lock()
 _PAGE_CACHE: "OrderedDict[str, tuple[float, BeautifulSoup]]" = OrderedDict()
 
 
@@ -76,28 +96,32 @@ class Book:
     author_link: str = ""
 
     def __str__(self):
-        return f'{self.title} - {self.author} ({self.id})'
+        return f"{self.title} - {self.author} ({self.id})"
 
 
 def get_page(url):
-    """Получение страницы"""
+    """Получение и кэширование страницы."""
     try:
         now = time.time()
-        if url in _PAGE_CACHE:
-            cached_time, cached_soup = _PAGE_CACHE[url]
-            if now - cached_time < config.PAGE_CACHE_TTL_SEC:
-                _PAGE_CACHE.move_to_end(url)
-                return cached_soup
-            _PAGE_CACHE.pop(url, None)
 
-        response = SESSION.get(url, timeout=config.REQUEST_TIMEOUT)
+        with _page_cache_lock:
+            if url in _PAGE_CACHE:
+                cached_time, cached_soup = _PAGE_CACHE[url]
+                if now - cached_time < config.PAGE_CACHE_TTL_SEC:
+                    _PAGE_CACHE.move_to_end(url)
+                    return cached_soup
+                _PAGE_CACHE.pop(url, None)
+
+        session = _get_session()
+        response = session.get(url, timeout=config.REQUEST_TIMEOUT)
         response.raise_for_status()
         soup = BeautifulSoup(response.text, "html.parser")
 
-        _PAGE_CACHE[url] = (now, soup)
-        _PAGE_CACHE.move_to_end(url)
-        if len(_PAGE_CACHE) > config.PAGE_CACHE_MAX_SIZE:
-            _PAGE_CACHE.popitem(last=False)
+        with _page_cache_lock:
+            _PAGE_CACHE[url] = (now, soup)
+            _PAGE_CACHE.move_to_end(url)
+            if len(_PAGE_CACHE) > config.PAGE_CACHE_MAX_SIZE:
+                _PAGE_CACHE.popitem(last=False)
 
         return soup
     except requests.exceptions.RequestException:
@@ -108,7 +132,7 @@ def get_page(url):
 
 
 def scrape_books_by_title(text: str) -> list[Book] | None:
-    """Поиск книг по названию"""
+    """Поиск книг по названию."""
     query_text = urllib.parse.quote(text)
     url = f"{config.SITE}/booksearch?ask={query_text}&chb=on"
 
@@ -116,64 +140,56 @@ def scrape_books_by_title(text: str) -> list[Book] | None:
     if not sp:
         return None
 
-    target_div = sp.find('div', attrs={'class': 'clear-block', 'id': 'main'})
+    target_div = sp.find("div", attrs={"class": "clear-block", "id": "main"})
     if not target_div:
-        target_div = sp.find('div', id='main')
+        target_div = sp.find("div", id="main")
         if not target_div:
             return None
 
-    # Ищем все ul списки
-    target_ul_list = target_div.find_all('ul')
-    
+    target_ul_list = target_div.find_all("ul")
     if len(target_ul_list) == 0:
         return None
 
     result = []
-    
-    # Проходим по всем спискам
+
     for target_ul in target_ul_list:
-        # Пропускаем списки с классами (обычно это навигация)
-        if target_ul.get('class'):
+        if target_ul.get("class"):
             continue
-            
+
         li_list = target_ul.find_all("li")
-        
+
         for li in li_list:
-            # Получаем все ссылки в элементе
-            all_links = li.find_all('a')
+            all_links = li.find_all("a")
             if not all_links:
                 continue
-            
-            # Первая ссылка должна быть на книгу
+
             first_link = all_links[0]
-            href = first_link.get('href', '')
-            
-            # Проверяем, что это ссылка на книгу
-            if not href.startswith('/b/'):
+            href = first_link.get("href", "")
+
+            if not href.startswith("/b/"):
                 continue
-            
-            book_id = href.replace('/b/', '')
+
+            book_id = href.replace("/b/", "")
             book = Book(book_id)
             book.title = first_link.text.strip()
-            book.link = config.SITE + href + '/'
-            
-            # Собираем авторов (остальные ссылки)
+            book.link = config.SITE + href + "/"
+
             authors = []
             for link in all_links[1:]:
-                link_href = link.get('href', '')
-                if link_href.startswith('/a/'):
+                link_href = link.get("href", "")
+                if link_href.startswith("/a/"):
                     authors.append(link.text.strip())
                     if not book.author_link:
-                        book.author_link = config.SITE + link_href + '/'
-            
-            book.author = ', '.join(authors) if authors else '[автор не указан]'
+                        book.author_link = config.SITE + link_href + "/"
+
+            book.author = ", ".join(authors) if authors else "[автор не указан]"
             result.append(book)
-    
+
     return result if result else None
 
 
 def scrape_books_by_author(text: str) -> list[list[Book]] | None:
-    """Поиск книг по автору"""
+    """Поиск книг по автору."""
     query_text = urllib.parse.quote(text)
     url = f"{config.SITE}/booksearch?ask={query_text}&cha=on"
 
@@ -181,56 +197,49 @@ def scrape_books_by_author(text: str) -> list[list[Book]] | None:
     if not sp:
         return None
 
-    target_div = sp.find('div', attrs={'class': 'clear-block', 'id': 'main'})
+    target_div = sp.find("div", attrs={"class": "clear-block", "id": "main"})
     if not target_div:
-        target_div = sp.find('div', id='main')
+        target_div = sp.find("div", id="main")
         if not target_div:
             return None
 
-    # Ищем списки авторов
-    target_ul_list = target_div.find_all('ul')
-    
+    target_ul_list = target_div.find_all("ul")
     if len(target_ul_list) == 0:
         return None
 
-    # Находим список с авторами
     authors_links = []
     for target_ul in target_ul_list:
-        if target_ul.get('class'):
+        if target_ul.get("class"):
             continue
-            
+
         li_list = target_ul.find_all("li")
         for li in li_list:
-            author_link = li.find('a')
+            author_link = li.find("a")
             if author_link:
-                href = author_link.get('href', '')
-                if href.startswith('/a/'):
-                    authors_links.append(config.SITE + href + '/')
+                href = author_link.get("href", "")
+                if href.startswith("/a/"):
+                    authors_links.append(config.SITE + href + "/")
 
     if not authors_links:
         return None
 
     final_res = []
-    
-    # Для каждого автора получаем его книги
+
     for author_link in authors_links:
         sp_author = get_page(author_link)
         if not sp_author:
             continue
 
-        # Получаем имя автора
         author_h1 = sp_author.find("h1", attrs={"class": "title"})
         if not author_h1:
             continue
         author = author_h1.text.strip()
 
-        # Находим форму с книгами
-        target_form = sp_author.find('form', attrs={'method': 'POST'})
+        target_form = sp_author.find("form", attrs={"method": "POST"})
         if not target_form:
             continue
 
-        # Исключаем переводы
-        target_p_translates = target_form.find("h3", string='Переводы')
+        target_p_translates = target_form.find("h3", string="Переводы")
         if target_p_translates:
             sibling = target_p_translates.next_sibling
             while sibling:
@@ -238,53 +247,49 @@ def scrape_books_by_author(text: str) -> list[list[Book]] | None:
                 sibling.extract()
                 sibling = next_sibling
 
-        # Ищем книги
         result = []
-        
-        # Способ 1: через SVG (новая разметка)
-        svg_elements = target_form.find_all('svg')
+
+        svg_elements = target_form.find_all("svg")
         for svg in svg_elements:
             book_link = svg.find_next_sibling("a")
             if book_link:
-                href = book_link.get('href', '')
-                if href.startswith('/b/'):
-                    book_id = href.replace('/b/', '')
+                href = book_link.get("href", "")
+                if href.startswith("/b/"):
+                    book_id = href.replace("/b/", "")
                     book = Book(book_id)
                     book.title = book_link.text.strip()
                     book.author = author
                     book.author_link = author_link
-                    book.link = config.SITE + href + '/'
+                    book.link = config.SITE + href + "/"
                     result.append(book)
-        
-        # Способ 2: через checkbox (старая разметка)
+
         if not result:
-            checkboxes = target_form.find_all('input', attrs={'type': 'checkbox'})
+            checkboxes = target_form.find_all("input", attrs={"type": "checkbox"})
             for cb in checkboxes:
-                book_link = cb.find_next_sibling('a')
+                book_link = cb.find_next_sibling("a")
                 if book_link:
-                    href = book_link.get('href', '')
-                    if href.startswith('/b/'):
-                        book_id = href.replace('/b/', '')
+                    href = book_link.get("href", "")
+                    if href.startswith("/b/"):
+                        book_id = href.replace("/b/", "")
                         book = Book(book_id)
                         book.title = book_link.text.strip()
                         book.author = author
                         book.author_link = author_link
-                        book.link = config.SITE + href + '/'
+                        book.link = config.SITE + href + "/"
                         result.append(book)
-        
-        # Способ 3: все ссылки на книги в форме
+
         if not result:
-            book_links = target_form.find_all('a', href=re.compile(r'^/b/\d+$'))
+            book_links = target_form.find_all("a", href=re.compile(r"^/b/\d+$"))
             for book_link in book_links:
-                href = book_link.get('href', '')
-                book_id = href.replace('/b/', '')
+                href = book_link.get("href", "")
+                book_id = href.replace("/b/", "")
                 book = Book(book_id)
                 book.title = book_link.text.strip()
                 book.author = author
                 book.author_link = author_link
-                book.link = config.SITE + href + '/'
+                book.link = config.SITE + href + "/"
                 result.append(book)
-        
+
         if result:
             final_res.append(result)
 
@@ -292,7 +297,7 @@ def scrape_books_by_author(text: str) -> list[list[Book]] | None:
 
 
 def scrape_books_mbl(title: str, author: str) -> list[Book] | None:
-    """Точный поиск по названию и автору"""
+    """Точный поиск по названию и автору."""
     title_q = urllib.parse.quote(title)
     author_q = urllib.parse.quote(author)
     url = f"{config.SITE}/makebooklist?ab=ab1&t={title_q}&ln={author_q}&sort=sd2"
@@ -300,172 +305,147 @@ def scrape_books_mbl(title: str, author: str) -> list[Book] | None:
     sp = get_page(url)
     if not sp:
         return None
-        
-    target_form = sp.find('form', attrs={'name': 'bk'})
-    
+
+    target_form = sp.find("form", attrs={"name": "bk"})
     if target_form is None:
         return None
 
-    div_list = target_form.find_all('div')
-    
+    div_list = target_form.find_all("div")
+
     result = []
     for d in div_list:
-        # Ищем ссылку на книгу
-        book_link = d.find('a', href=re.compile(r'^/b/\d+$'))
+        book_link = d.find("a", href=re.compile(r"^/b/\d+$"))
         if not book_link:
             continue
-            
-        b_href = book_link.get('href')
-        book_id = b_href.replace('/b/', '')
-        
+
+        b_href = book_link.get("href")
+        book_id = b_href.replace("/b/", "")
+
         book = Book(book_id)
         book.title = book_link.text.strip()
-        book.link = config.SITE + b_href + '/'
-        
-        # Ищем авторов
-        author_links = d.find_all('a', href=re.compile(r'^/a/\d+$'))
+        book.link = config.SITE + b_href + "/"
+
+        author_links = d.find_all("a", href=re.compile(r"^/a/\d+$"))
         if author_links:
             authors = [a.text.strip() for a in author_links]
-            # Реверсируем порядок для правильного отображения
-            book.author = ', '.join(authors[::-1])
-            # Сохраняем ссылку на первого автора
-            book.author_link = config.SITE + author_links[0].get('href', '') + '/'
+            book.author = ", ".join(authors[::-1])
+            book.author_link = config.SITE + author_links[0].get("href", "") + "/"
         else:
-            book.author = author or '[автор не указан]'
-        
+            book.author = author or "[автор не указан]"
+
         result.append(book)
 
     return result if result else None
 
 
 def get_book_by_id(book_id):
-    """Получение книги по ID с аннотацией, жанрами и рейтингом"""
+    """Получение книги по ID с аннотацией, жанрами и рейтингом."""
     book = Book(book_id)
     book.link = f"{config.SITE}/b/{book_id}/"
 
     sp = get_page(book.link)
     if not sp:
         return None
-        
-    target_div = sp.find('div', attrs={'class': 'clear-block', 'id': 'main'})
+
+    target_div = sp.find("div", attrs={"class": "clear-block", "id": "main"})
     if not target_div:
-        target_div = sp.find('div', id='main')
+        target_div = sp.find("div", id="main")
         if not target_div:
             return None
 
-    target_h1 = target_div.find('h1', attrs={'class': 'title'})
+    target_h1 = target_div.find("h1", attrs={"class": "title"})
     if not target_h1:
         return None
-        
+
     book.title = target_h1.text.strip()
     if book.title == "Книги":
         return None
-    
-    # Размер книги - ищем в разных местах
-    size_span = target_div.find('span', string=re.compile(r'\d+.*[МК]Б'))
+
+    size_span = target_div.find("span", string=re.compile(r"\d+.*[МК]Б"))
     if not size_span:
-        size_elements = target_div.find_all(string=re.compile(r'Размер.*?\d+.*?[МК]Б'))
+        size_elements = target_div.find_all(string=re.compile(r"Размер.*?\d+.*?[МК]Б"))
         if size_elements:
             book.size = size_elements[0].strip()
     else:
         book.size = size_span.text.strip()
 
-    # Обложка
-    target_img = target_div.find('img', attrs={'alt': 'Cover image'})
+    target_img = target_div.find("img", attrs={"alt": "Cover image"})
     if target_img:
-        img_src = target_img.get('src')
+        img_src = target_img.get("src")
         if img_src:
-            book.cover = config.SITE + img_src if not img_src.startswith('http') else img_src
-    
-    # Форматы для скачивания
-    format_links = target_div.find_all('a', string=re.compile(r'\(.*(?:fb2|epub|mobi|pdf|djvu)\)'))
+            book.cover = config.SITE + img_src if not img_src.startswith("http") else img_src
+
+    format_links = target_div.find_all("a", string=re.compile(r"\(.*(?:fb2|epub|mobi|pdf|djvu)\)"))
     for a in format_links:
         b_format = a.text.strip()
-        link = a.get('href')
+        link = a.get("href")
         if link:
-            book.formats[b_format] = config.SITE + link if not link.startswith('http') else link
+            book.formats[b_format] = config.SITE + link if not link.startswith("http") else link
 
-    # Автор
-    author_link = target_h1.find_next('a')
-    if author_link and '/a/' in author_link.get('href', ''):
+    author_link = target_h1.find_next("a")
+    if author_link and "/a/" in author_link.get("href", ""):
         book.author = author_link.text.strip()
-        book.author_link = config.SITE + author_link.get('href', '') + '/'
+        book.author_link = config.SITE + author_link.get("href", "") + "/"
     else:
-        book.author = '[автор не указан]'
+        book.author = "[автор не указан]"
 
-    # ── Жанры ──
     try:
-        genre_links = target_div.find_all('a', href=re.compile(r'^/g/\d+'))
+        genre_links = target_div.find_all("a", href=re.compile(r"^/g/\d+"))
         if genre_links:
-            book.genres = list(dict.fromkeys(
-                g.text.strip() for g in genre_links if g.text.strip()
-            ))
+            book.genres = list(dict.fromkeys(g.text.strip() for g in genre_links if g.text.strip()))
     except Exception:
         logger.debug("Failed to parse genres", extra={"book_id": book_id}, exc_info=True)
 
-    # ── Аннотация ──
     try:
-        # Flibusta хранит аннотацию в <p> после метаданных
-        # Пробуем найти блок с описанием
         annotation_parts = []
 
-        # Способ 1: ищем <h2> или заголовок "Аннотация"
-        ann_header = target_div.find(
-            ['h2', 'h3'], string=re.compile(r'аннотация|описание', re.IGNORECASE)
-        )
+        ann_header = target_div.find(["h2", "h3"], string=re.compile(r"аннотация|описание", re.IGNORECASE))
         if ann_header:
             sibling = ann_header.find_next_sibling()
-            while sibling and sibling.name in ('p', 'div', None):
+            while sibling and sibling.name in ("p", "div", None):
                 txt = sibling.get_text(strip=True)
                 if txt:
                     annotation_parts.append(txt)
                 sibling = sibling.find_next_sibling()
-                if sibling and sibling.name in ('h2', 'h3', 'form'):
+                if sibling and sibling.name in ("h2", "h3", "form"):
                     break
 
-        # Способ 2: ищем <p> в content-area
         if not annotation_parts:
-            content_div = target_div.find('div', class_=re.compile(
-                r'content|body|description|field-item', re.IGNORECASE
-            ))
+            content_div = target_div.find(
+                "div", class_=re.compile(r"content|body|description|field-item", re.IGNORECASE)
+            )
             if content_div:
-                paragraphs = content_div.find_all('p')
+                paragraphs = content_div.find_all("p")
                 for p in paragraphs:
                     txt = p.get_text(strip=True)
                     if txt and len(txt) > 20:
                         annotation_parts.append(txt)
 
-        # Способ 3: просто все <p> в main div (фильтруем короткие)
         if not annotation_parts:
-            for p in target_div.find_all('p'):
+            for p in target_div.find_all("p"):
                 txt = p.get_text(strip=True)
-                # Пропускаем слишком короткие или технические строки
-                if (txt and len(txt) > 30
-                        and not re.match(r'^(Скачать|Размер|Формат)', txt)):
+                if txt and len(txt) > 30 and not re.match(r"^(Скачать|Размер|Формат)", txt):
                     annotation_parts.append(txt)
 
         if annotation_parts:
-            book.annotation = '\n'.join(annotation_parts[:5])  # макс 5 абзацев
-            # Обрезаем до 1500 символов
+            book.annotation = "\n".join(annotation_parts[:5])
             if len(book.annotation) > 1500:
-                book.annotation = book.annotation[:1497] + '...'
+                book.annotation = book.annotation[:1497] + "..."
     except Exception:
         logger.debug("Failed to parse annotation", extra={"book_id": book_id}, exc_info=True)
 
-    # ── Серия ──
     try:
-        series_link = target_div.find('a', href=re.compile(r'^/sequence/\d+'))
+        series_link = target_div.find("a", href=re.compile(r"^/sequence/\d+"))
         if series_link:
             book.series = series_link.text.strip()
     except Exception:
         logger.debug("Failed to parse series", extra={"book_id": book_id}, exc_info=True)
 
-    # ── Год ──
     try:
         if not book.year:
-            year_match = target_div.find(string=re.compile(r'Год\s*издания.*?(\d{4})'))
+            year_match = target_div.find(string=re.compile(r"Год\s*издания.*?(\d{4})"))
             if year_match:
-                m = re.search(r'(\d{4})', str(year_match))
+                m = re.search(r"(\d{4})", str(year_match))
                 if m:
                     book.year = m.group(1)
     except Exception:
@@ -474,8 +454,7 @@ def get_book_by_id(book_id):
     return book
 
 
-def get_other_books_by_author(author_url: str, exclude_book_id: str = None,
-                               limit: int = 10) -> list[Book]:
+def get_other_books_by_author(author_url: str, exclude_book_id: str = None, limit: int = 10) -> list[Book]:
     """Получить другие книги автора по ссылке на страницу автора."""
     if not author_url:
         return []
@@ -487,22 +466,22 @@ def get_other_books_by_author(author_url: str, exclude_book_id: str = None,
         author_h1 = sp.find("h1", attrs={"class": "title"})
         author_name = author_h1.text.strip() if author_h1 else ""
 
-        target_form = sp.find('form', attrs={'method': 'POST'})
+        target_form = sp.find("form", attrs={"method": "POST"})
         if not target_form:
             return []
 
         result = []
-        book_links = target_form.find_all('a', href=re.compile(r'^/b/\d+$'))
+        book_links = target_form.find_all("a", href=re.compile(r"^/b/\d+$"))
         for bl in book_links:
-            href = bl.get('href', '')
-            bid = href.replace('/b/', '')
+            href = bl.get("href", "")
+            bid = href.replace("/b/", "")
             if bid == exclude_book_id:
                 continue
             b = Book(bid)
             b.title = bl.text.strip()
             b.author = author_name
             b.author_link = author_url
-            b.link = config.SITE + href + '/'
+            b.link = config.SITE + href + "/"
             result.append(b)
             if len(result) >= limit:
                 break
@@ -513,18 +492,19 @@ def get_other_books_by_author(author_url: str, exclude_book_id: str = None,
 
 
 def download_book_cover(book: Book):
-    """Скачивание обложки книги"""
-    if not book or not hasattr(book, 'cover') or not book.cover:
+    """Скачивание обложки книги."""
+    if not book or not book.cover:
         return
-        
+
     try:
-        c_response = SESSION.get(book.cover, timeout=config.DOWNLOAD_TIMEOUT)
+        session = _get_session()
+        c_response = session.get(book.cover, timeout=config.DOWNLOAD_TIMEOUT)
         c_response.raise_for_status()
-        
+
         cover_dir = os.path.join(config.BOOKS_DIR, book.id)
         os.makedirs(cover_dir, exist_ok=True)
-        
-        c_full_path = os.path.join(cover_dir, 'cover.jpg')
+
+        c_full_path = os.path.join(cover_dir, "cover.jpg")
         with open(c_full_path, "wb") as f:
             f.write(c_response.content)
     except (OSError, requests.exceptions.RequestException):
@@ -535,44 +515,46 @@ def download_book_cover(book: Book):
         )
 
 
-def download_book(book: Book, b_format: str):
-    """Скачивание книги в указанном формате"""
-    if not book or not hasattr(book, 'formats') or b_format not in book.formats:
+def download_book(book: Book, b_format: str) -> tuple[io.BytesIO | None, str | None]:
+    """Скачивание книги в указанном формате (стриминг в буфер)."""
+    if not book or b_format not in book.formats:
         return None, None
-        
+
     book_url = book.formats[b_format]
 
     try:
-        b_response = SESSION.get(book_url, timeout=config.DOWNLOAD_TIMEOUT)
-        
-        b_response.raise_for_status()
+        session = _get_session()
 
-        # Получаем имя файла из заголовков
-        content_disposition = b_response.headers.get('content-disposition', '')
-        if 'filename=' in content_disposition:
-            n_index = content_disposition.index('filename=')
-            b_filename = content_disposition[n_index + 9:].replace('"', '').replace("'", '')
-            # Обрабатываем кодировку в filename (RFC 5987)
-            if b_filename.startswith("UTF-8''"):
-                b_filename = urllib.parse.unquote(b_filename[7:])
-            if b_filename.endswith('.fb2.zip'):
-                b_filename = b_filename.replace('.zip', '')
-        else:
-            # Генерируем имя файла
-            ext = b_format.split('(')[1].split(')')[0] if '(' in b_format else 'txt'
-            # Очищаем расширение от лишних символов
-            ext = re.sub(r'[^a-zA-Z0-9]', '', ext.lower())
-            b_filename = f"{book.title} - {book.author}.{ext}"
-            # Убираем недопустимые символы для Windows/Linux
-            b_filename = re.sub(r'[<>:"/\\|?*\x00-\x1f]', '_', b_filename)
-            # Ограничиваем длину имени файла
-            if len(b_filename) > 200:
-                name_part = b_filename[:190]
-                ext_part = b_filename[-10:]
-                b_filename = name_part + ext_part
+        with session.get(book_url, timeout=config.DOWNLOAD_TIMEOUT, stream=True) as b_response:
+            b_response.raise_for_status()
 
-        return b_response.content, b_filename
-        
+            # Получаем имя файла из заголовков
+            content_disposition = b_response.headers.get("content-disposition", "")
+            if "filename=" in content_disposition:
+                n_index = content_disposition.index("filename=")
+                b_filename = content_disposition[n_index + 9 :].replace('"', "").replace("'", "")
+                if b_filename.startswith("UTF-8''"):
+                    b_filename = urllib.parse.unquote(b_filename[7:])
+                if b_filename.endswith(".fb2.zip"):
+                    b_filename = b_filename.replace(".zip", "")
+            else:
+                ext = b_format.split("(")[1].split(")")[0] if "(" in b_format else "txt"
+                ext = re.sub(r"[^a-zA-Z0-9]", "", ext.lower())
+                b_filename = f"{book.title} - {book.author}.{ext}"
+                b_filename = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", b_filename)
+                if len(b_filename) > 200:
+                    name_part = b_filename[:190]
+                    ext_part = b_filename[-10:]
+                    b_filename = name_part + ext_part
+
+            buf = io.BytesIO()
+            for chunk in b_response.iter_content(chunk_size=8192):
+                buf.write(chunk)
+            buf.seek(0)
+            buf.name = b_filename
+
+        return buf, b_filename
+
     except requests.exceptions.Timeout:
         logger.warning(
             "Download timeout",
@@ -582,15 +564,10 @@ def download_book(book: Book, b_format: str):
         return None, None
     except requests.exceptions.RequestException as e:
         extra = {"book_id": book.id, "format": b_format, "url": book_url}
-        # Редирект (напр. epub → static.flibusta.is) — логируем финальный URL
         req = getattr(e, "request", None)
         if req and getattr(req, "url", None) and req.url != book_url:
             extra["resolved_url"] = req.url
-        logger.warning(
-            "Download request failed",
-            extra=extra,
-            exc_info=True,
-        )
+        logger.warning("Download request failed", extra=extra, exc_info=True)
         return None, None
     except Exception:
         logger.warning(
@@ -619,7 +596,9 @@ def cleanup_old_files(days: int = 30):
                         try:
                             os.remove(os.path.join(root, name))
                         except OSError:
-                            logger.debug("Failed to remove file", extra={"path": os.path.join(root, name)}, exc_info=True)
+                            logger.debug(
+                                "Failed to remove file", extra={"path": os.path.join(root, name)}, exc_info=True
+                            )
                     try:
                         os.rmdir(root)
                     except OSError:

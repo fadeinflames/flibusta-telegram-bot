@@ -8,37 +8,39 @@ from dotenv import load_dotenv
 load_dotenv(".env")
 
 from telegram.ext import (
-    ApplicationBuilder, CommandHandler, CallbackQueryHandler,
-    MessageHandler, InlineQueryHandler,
+    ApplicationBuilder,
+    CallbackQueryHandler,
+    CommandHandler,
+    InlineQueryHandler,
+    MessageHandler,
 )
 from telegram.ext.filters import TEXT
 from telegram.request import HTTPXRequest
 
-from src.tg_bot import (
-    start_callback,
-    button,
-    help_command,
-    find_the_book,
-    search_by_title,
-    search_by_author,
-    search_exact,
-    search_by_id,
-    universal_search,
-    list_allowed_users,
-    show_stats,
-    favorites_command,
-    history_command,
-    downloads_command,
-    mystats_command,
-    settings_command,
-    setpage_command,
-    setformat_command,
-    cleanup_job,
-    app_error_handler,
-    inline_query,
-)
-
 from src import database as db
+from src.tg_bot import (
+    app_error_handler,
+    button,
+    cleanup_job,
+    downloads_command,
+    favorites_command,
+    find_the_book,
+    help_command,
+    history_command,
+    inline_query,
+    list_allowed_users,
+    mystats_command,
+    search_by_author,
+    search_by_id,
+    search_by_title,
+    search_exact,
+    setformat_command,
+    setpage_command,
+    settings_command,
+    show_stats,
+    start_callback,
+    universal_search,
+)
 
 
 def main():
@@ -59,26 +61,23 @@ def main():
     proxy_url = os.getenv("TELEGRAM_PROXY")
 
     request_kwargs = {
-        'connection_pool_size': 8,
-        'connect_timeout': 20.0,
-        'read_timeout': 20.0,
-        'write_timeout': 20.0,
-        'pool_timeout': 20.0,
+        "connection_pool_size": 8,
+        "connect_timeout": 20.0,
+        "read_timeout": 20.0,
+        "write_timeout": 20.0,
+        "pool_timeout": 20.0,
     }
 
     if proxy_url:
         print(f"[NET ] Используется прокси: {proxy_url}")
-        request_kwargs['proxy'] = proxy_url
+        request_kwargs["proxy"] = proxy_url
     else:
         print("[NET ] Прямое подключение (без прокси)")
 
     request = HTTPXRequest(**request_kwargs)
 
     # Создаем приложение с настроенным request
-    app = ApplicationBuilder() \
-        .token(token) \
-        .request(request) \
-        .build()
+    app = ApplicationBuilder().token(token).request(request).build()
 
     # ===== ОСНОВНЫЕ КОМАНДЫ =====
     app.add_handler(CommandHandler("start", start_callback))
@@ -118,7 +117,7 @@ def main():
     job_queue.run_daily(
         cleanup_job,
         time=time(hour=3, minute=0),
-        name='cleanup_job',
+        name="cleanup_job",
     )
 
     print("=" * 50)
@@ -156,7 +155,7 @@ def main():
         print("[CONN] Подключаемся к Telegram API...")
         app.run_polling(
             drop_pending_updates=True,
-            allowed_updates=['message', 'callback_query', 'inline_query'],
+            allowed_updates=["message", "callback_query", "inline_query"],
         )
     except KeyboardInterrupt:
         print("\n[STOP] Получен сигнал остановки (Ctrl+C)")

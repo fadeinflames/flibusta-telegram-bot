@@ -15,3 +15,9 @@ services:
       - ./data:/srv/data
       # Раскомментируйте для hot-reload при разработке:
       # - ./src:/srv/src
+    healthcheck:
+      test: ["CMD", "pgrep", "-f", "python src/srv.py"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s

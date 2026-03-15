@@ -1,7 +1,7 @@
 import logging
 import os
 import sys
-from datetime import datetime, UTC
+from datetime import UTC, datetime
 from logging.handlers import RotatingFileHandler
 
 from json_log_formatter import JSONFormatter, _json_serializable

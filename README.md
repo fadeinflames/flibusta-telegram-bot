@@ -21,7 +21,12 @@ Telegram-бот для поиска книг на Flibusta и скачивани
 ## Структура проекта
 
 - `src/srv.py` — точка входа, регистрация хендлеров, запуск polling.
-- `src/tg_bot.py` — логика команд, callback-обработчики, UI.
+- `src/tg_bot.py` — callback-роутер, текстовые команды, admin, inline, jobs.
+- `src/tg_bot_helpers.py` — общие утилиты, декораторы, async-обёртки.
+- `src/tg_bot_views.py` — функции отображения экранов.
+- `src/tg_bot_search.py` — поисковые команды.
+- `src/tg_bot_favorites.py` — управление избранным.
+- `src/tg_bot_download.py` — скачивание книг.
 - `src/flib.py` — парсинг сайта и скачивание файлов.
 - `src/database.py` — доступ к SQLite и SQL-операции.
 - `src/config.py` — конфигурация и константы.

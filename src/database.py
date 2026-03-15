@@ -1,22 +1,18 @@
-import sqlite3
 import json
-from datetime import datetime
-from typing import List, Dict, Optional, Tuple
-from contextlib import contextmanager
 import os
+import sqlite3
+from contextlib import contextmanager
 
 from src import config
 
-# Путь к базе данных
 DB_PATH = config.DB_PATH
 
 
 @contextmanager
 def get_db():
-    """Контекстный менеджер для работы с БД"""
-    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+    """Контекстный менеджер для работы с БД."""
     conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row  # Для получения результатов как словарей
+    conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys=ON")
     try:
         yield conn
@@ -25,14 +21,14 @@ def get_db():
 
 
 def init_database():
-    """Инициализация базы данных"""
+    """Инициализация базы данных."""
+    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+
     with get_db() as conn:
-        # WAL mode — лучше для конкурентного чтения
         conn.execute("PRAGMA journal_mode=WAL")
         cursor = conn.cursor()
-        
-        # Таблица пользователей
-        cursor.execute('''
+
+        cursor.execute("""
             CREATE TABLE IF NOT EXISTS users (
                 user_id TEXT PRIMARY KEY,
                 username TEXT,
@@ -45,10 +41,9 @@ def init_database():
                 preferences TEXT DEFAULT '{}',
                 is_banned BOOLEAN DEFAULT 0
             )
-        ''')
-        
-        # Таблица истории поиска
-        cursor.execute('''
+        """)
+
+        cursor.execute("""
             CREATE TABLE IF NOT EXISTS search_history (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id TEXT,
@@ -58,10 +53,9 @@ def init_database():
                 timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (user_id) REFERENCES users (user_id)
             )
-        ''')
-        
-        # Таблица избранных книг
-        cursor.execute('''
+        """)
+
+        cursor.execute("""
             CREATE TABLE IF NOT EXISTS favorites (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id TEXT,
@@ -74,10 +68,9 @@ def init_database():
                 FOREIGN KEY (user_id) REFERENCES users (user_id),
                 UNIQUE(user_id, book_id)
             )
-        ''')
-        
-        # Таблица скачанных книг
-        cursor.execute('''
+        """)
+
+        cursor.execute("""
             CREATE TABLE IF NOT EXISTS downloads (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id TEXT,
@@ -88,10 +81,9 @@ def init_database():
                 download_date DATETIME DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (user_id) REFERENCES users (user_id)
             )
-        ''')
-        
-        # Таблица кэша книг
-        cursor.execute('''
+        """)
+
+        cursor.execute("""
             CREATE TABLE IF NOT EXISTS books_cache (
                 book_id TEXT PRIMARY KEY,
                 title TEXT,
@@ -105,476 +97,560 @@ def init_database():
                 cached_date DATETIME DEFAULT CURRENT_TIMESTAMP,
                 access_count INTEGER DEFAULT 0
             )
-        ''')
-        
-        # Таблица статистики
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS statistics (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                date DATE DEFAULT CURRENT_DATE,
-                total_searches INTEGER DEFAULT 0,
-                total_downloads INTEGER DEFAULT 0,
-                unique_users INTEGER DEFAULT 0,
-                popular_queries TEXT DEFAULT '[]',
-                popular_books TEXT DEFAULT '[]'
-            )
-        ''')
-        
-        # ── Миграция: добавляем новые колонки в books_cache ──
+        """)
+
+        # Миграция: добавляем новые колонки в books_cache
         for col, col_type in [
-            ('annotation', 'TEXT DEFAULT ""'),
-            ('genres', 'TEXT DEFAULT "[]"'),
-            ('rating', 'TEXT DEFAULT ""'),
-            ('author_link', 'TEXT DEFAULT ""'),
+            ("annotation", 'TEXT DEFAULT ""'),
+            ("genres", 'TEXT DEFAULT "[]"'),
+            ("rating", 'TEXT DEFAULT ""'),
+            ("author_link", 'TEXT DEFAULT ""'),
         ]:
             try:
-                cursor.execute(f'ALTER TABLE books_cache ADD COLUMN {col} {col_type}')
+                cursor.execute(f"ALTER TABLE books_cache ADD COLUMN {col} {col_type}")
             except sqlite3.OperationalError:
-                pass  # Колонка уже существует
-        
-        # Создаем индексы для оптимизации
-        cursor.execute('CREATE INDEX IF NOT EXISTS idx_search_history_user ON search_history(user_id)')
-        cursor.execute('CREATE INDEX IF NOT EXISTS idx_search_history_timestamp ON search_history(timestamp)')
-        cursor.execute('CREATE INDEX IF NOT EXISTS idx_favorites_user ON favorites(user_id)')
-        cursor.execute('CREATE INDEX IF NOT EXISTS idx_favorites_tags ON favorites(user_id, tags)')
-        cursor.execute('CREATE INDEX IF NOT EXISTS idx_downloads_user ON downloads(user_id)')
-        cursor.execute('CREATE INDEX IF NOT EXISTS idx_downloads_book ON downloads(book_id)')
-        
+                pass
+
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_search_history_user ON search_history(user_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_search_history_timestamp ON search_history(timestamp)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_favorites_user ON favorites(user_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_favorites_tags ON favorites(user_id, tags)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_downloads_user ON downloads(user_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_downloads_book ON downloads(book_id)")
+
         conn.commit()
 
 
 # ────────────────────── Пользователи ──────────────────────
 
+
 def add_or_update_user(user_id: str, username: str = None, full_name: str = None, is_admin: bool = False):
-    """Добавить или обновить пользователя"""
+    """Добавить или обновить пользователя."""
     with get_db() as conn:
         cursor = conn.cursor()
-        cursor.execute('''
+        cursor.execute(
+            """
             INSERT INTO users (user_id, username, full_name, is_admin)
             VALUES (?, ?, ?, ?)
             ON CONFLICT(user_id) DO UPDATE SET
                 username = COALESCE(?, username),
                 full_name = COALESCE(?, full_name),
                 last_seen = CURRENT_TIMESTAMP
-        ''', (user_id, username, full_name, is_admin, username, full_name))
+        """,
+            (user_id, username, full_name, is_admin, username, full_name),
+        )
         conn.commit()
 
 
-def get_user(user_id: str) -> Optional[Dict]:
-    """Получить информацию о пользователе"""
+def get_user(user_id: str) -> dict | None:
+    """Получить информацию о пользователе."""
     with get_db() as conn:
         cursor = conn.cursor()
-        cursor.execute('SELECT * FROM users WHERE user_id = ?', (user_id,))
+        cursor.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
         row = cursor.fetchone()
         return dict(row) if row else None
 
 
 def update_user_stats(user_id: str, search: bool = False, download: bool = False):
-    """Обновить статистику пользователя"""
+    """Обновить статистику пользователя (отдельный вызов, когда нужно)."""
     with get_db() as conn:
         cursor = conn.cursor()
         if search:
-            cursor.execute('''
+            cursor.execute(
+                """
                 UPDATE users SET search_count = search_count + 1, last_seen = CURRENT_TIMESTAMP
                 WHERE user_id = ?
-            ''', (user_id,))
+            """,
+                (user_id,),
+            )
         if download:
-            cursor.execute('''
+            cursor.execute(
+                """
                 UPDATE users SET download_count = download_count + 1, last_seen = CURRENT_TIMESTAMP
                 WHERE user_id = ?
-            ''', (user_id,))
+            """,
+                (user_id,),
+            )
         conn.commit()
 
 
 def set_user_preference(user_id: str, key: str, value):
-    """Установить настройку пользователя"""
+    """Установить настройку пользователя."""
     with get_db() as conn:
         cursor = conn.cursor()
-        cursor.execute('SELECT preferences FROM users WHERE user_id = ?', (user_id,))
+        cursor.execute("SELECT preferences FROM users WHERE user_id = ?", (user_id,))
         row = cursor.fetchone()
         if row:
-            prefs = json.loads(row['preferences'] or '{}')
+            prefs = json.loads(row["preferences"] or "{}")
             prefs[key] = value
-            cursor.execute('UPDATE users SET preferences = ? WHERE user_id = ?', 
-                         (json.dumps(prefs), user_id))
+            cursor.execute("UPDATE users SET preferences = ? WHERE user_id = ?", (json.dumps(prefs), user_id))
             conn.commit()
 
 
 def get_user_preference(user_id: str, key: str, default=None):
-    """Получить настройку пользователя"""
+    """Получить настройку пользователя."""
     user = get_user(user_id)
     if user:
-        prefs = json.loads(user['preferences'] or '{}')
+        prefs = json.loads(user["preferences"] or "{}")
         return prefs.get(key, default)
     return default
 
 
 # ────────────────────── История поиска ──────────────────────
 
+
 def add_search_history(user_id: str, command: str, query: str, results_count: int = 0):
-    """Добавить запись в историю поиска"""
+    """Добавить запись в историю поиска и обновить счётчик в одной транзакции."""
     with get_db() as conn:
         cursor = conn.cursor()
-        cursor.execute('''
+        cursor.execute(
+            """
             INSERT INTO search_history (user_id, command, query, results_count)
             VALUES (?, ?, ?, ?)
-        ''', (user_id, command, query, results_count))
+        """,
+            (user_id, command, query, results_count),
+        )
+        cursor.execute(
+            """
+            UPDATE users SET search_count = search_count + 1, last_seen = CURRENT_TIMESTAMP
+            WHERE user_id = ?
+        """,
+            (user_id,),
+        )
         conn.commit()
-        update_user_stats(user_id, search=True)
 
 
-def get_user_search_history(user_id: str, limit: int = 10) -> List[Dict]:
-    """Получить историю поиска пользователя"""
+def get_user_search_history(user_id: str, limit: int = 10) -> list[dict]:
+    """Получить историю поиска пользователя."""
     with get_db() as conn:
         cursor = conn.cursor()
-        cursor.execute('''
-            SELECT * FROM search_history 
-            WHERE user_id = ? 
-            ORDER BY timestamp DESC 
+        cursor.execute(
+            """
+            SELECT * FROM search_history
+            WHERE user_id = ?
+            ORDER BY timestamp DESC, id DESC
             LIMIT ?
-        ''', (user_id, limit))
+        """,
+            (user_id, limit),
+        )
         return [dict(row) for row in cursor.fetchall()]
 
 
-def get_last_search(user_id: str) -> Optional[Dict]:
-    """Получить последний поисковый запрос пользователя"""
+def get_last_search(user_id: str) -> dict | None:
+    """Получить последний поисковый запрос пользователя."""
     with get_db() as conn:
         cursor = conn.cursor()
-        cursor.execute('''
+        cursor.execute(
+            """
             SELECT command, query FROM search_history
             WHERE user_id = ?
-            ORDER BY timestamp DESC
+            ORDER BY timestamp DESC, id DESC
             LIMIT 1
-        ''', (user_id,))
+        """,
+            (user_id,),
+        )
         row = cursor.fetchone()
         return dict(row) if row else None
 
 
 # ────────────────────── Избранное ──────────────────────
 
-def add_to_favorites(user_id: str, book_id: str, title: str, author: str,
-                     tags: str = None, notes: str = None):
-    """Добавить книгу в избранное"""
+
+def add_to_favorites(user_id: str, book_id: str, title: str, author: str, tags: str = None, notes: str = None):
+    """Добавить книгу в избранное."""
     with get_db() as conn:
         cursor = conn.cursor()
         try:
-            cursor.execute('''
+            cursor.execute(
+                """
                 INSERT INTO favorites (user_id, book_id, title, author, tags, notes)
                 VALUES (?, ?, ?, ?, ?, ?)
-            ''', (user_id, book_id, title, author, tags, notes))
+            """,
+                (user_id, book_id, title, author, tags, notes),
+            )
             conn.commit()
             return True
         except sqlite3.IntegrityError:
-            return False  # Книга уже в избранном
+            return False
 
 
 def remove_from_favorites(user_id: str, book_id: str):
-    """Удалить книгу из избранного"""
+    """Удалить книгу из избранного."""
     with get_db() as conn:
         cursor = conn.cursor()
-        cursor.execute('DELETE FROM favorites WHERE user_id = ? AND book_id = ?', (user_id, book_id))
+        cursor.execute("DELETE FROM favorites WHERE user_id = ? AND book_id = ?", (user_id, book_id))
         conn.commit()
         return cursor.rowcount > 0
 
 
-def get_user_favorites(user_id: str, offset: int = 0, limit: int = 10,
-                       tag: str = None) -> Tuple[List[Dict], int]:
-    """Получить избранное пользователя с пагинацией и фильтром по тегу"""
+def get_user_favorites(user_id: str, offset: int = 0, limit: int = 10, tag: str = None) -> tuple[list[dict], int]:
+    """Получить избранное пользователя с пагинацией и фильтром по тегу."""
     with get_db() as conn:
         cursor = conn.cursor()
 
         if tag:
             cursor.execute(
-                'SELECT COUNT(*) as total FROM favorites WHERE user_id = ? AND tags = ?',
+                "SELECT COUNT(*) as total FROM favorites WHERE user_id = ? AND tags = ?",
                 (user_id, tag),
             )
         else:
             cursor.execute(
-                'SELECT COUNT(*) as total FROM favorites WHERE user_id = ?',
+                "SELECT COUNT(*) as total FROM favorites WHERE user_id = ?",
                 (user_id,),
             )
-        total = cursor.fetchone()['total']
+        total = cursor.fetchone()["total"]
 
         if tag:
-            cursor.execute('''
-                SELECT * FROM favorites 
+            cursor.execute(
+                """
+                SELECT * FROM favorites
                 WHERE user_id = ? AND tags = ?
-                ORDER BY added_date DESC 
+                ORDER BY added_date DESC
                 LIMIT ? OFFSET ?
-            ''', (user_id, tag, limit, offset))
+            """,
+                (user_id, tag, limit, offset),
+            )
         else:
-            cursor.execute('''
-                SELECT * FROM favorites 
-                WHERE user_id = ? 
-                ORDER BY added_date DESC 
+            cursor.execute(
+                """
+                SELECT * FROM favorites
+                WHERE user_id = ?
+                ORDER BY added_date DESC
                 LIMIT ? OFFSET ?
-            ''', (user_id, limit, offset))
-        
+            """,
+                (user_id, limit, offset),
+            )
+
         favorites = [dict(row) for row in cursor.fetchall()]
         return favorites, total
 
 
 def is_favorite(user_id: str, book_id: str) -> bool:
-    """Проверить, есть ли книга в избранном"""
+    """Проверить, есть ли книга в избранном."""
     with get_db() as conn:
         cursor = conn.cursor()
-        cursor.execute('SELECT 1 FROM favorites WHERE user_id = ? AND book_id = ?', (user_id, book_id))
+        cursor.execute("SELECT 1 FROM favorites WHERE user_id = ? AND book_id = ?", (user_id, book_id))
         return cursor.fetchone() is not None
 
 
-def update_favorite_tags(user_id: str, book_id: str, tags: str):
-    """Обновить теги (полку) книги в избранном"""
+def are_favorites(user_id: str, book_ids: list[str]) -> set[str]:
+    """Batch-проверка: какие из book_ids есть в избранном пользователя."""
+    if not book_ids:
+        return set()
     with get_db() as conn:
         cursor = conn.cursor()
-        cursor.execute('''
-            UPDATE favorites SET tags = ? 
+        placeholders = ",".join("?" * len(book_ids))
+        cursor.execute(
+            f"SELECT book_id FROM favorites WHERE user_id = ? AND book_id IN ({placeholders})",
+            [user_id, *book_ids],
+        )
+        return {row["book_id"] for row in cursor.fetchall()}
+
+
+def update_favorite_tags(user_id: str, book_id: str, tags: str):
+    """Обновить теги (полку) книги в избранном."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            UPDATE favorites SET tags = ?
             WHERE user_id = ? AND book_id = ?
-        ''', (tags, user_id, book_id))
+        """,
+            (tags, user_id, book_id),
+        )
         conn.commit()
 
 
 def update_favorite_notes(user_id: str, book_id: str, notes: str):
-    """Обновить заметки к книге в избранном"""
+    """Обновить заметки к книге в избранном."""
     with get_db() as conn:
         cursor = conn.cursor()
-        cursor.execute('''
-            UPDATE favorites SET notes = ? 
+        cursor.execute(
+            """
+            UPDATE favorites SET notes = ?
             WHERE user_id = ? AND book_id = ?
-        ''', (notes, user_id, book_id))
+        """,
+            (notes, user_id, book_id),
+        )
         conn.commit()
 
 
-def search_favorites(user_id: str, query: str) -> List[Dict]:
-    """Поиск по избранному (по названию или автору)"""
+def search_favorites(user_id: str, query: str) -> list[dict]:
+    """Поиск по избранному (по названию или автору)."""
     with get_db() as conn:
         cursor = conn.cursor()
-        like_query = f'%{query}%'
-        cursor.execute('''
+        like_query = f"%{query}%"
+        cursor.execute(
+            """
             SELECT * FROM favorites
             WHERE user_id = ? AND (title LIKE ? OR author LIKE ?)
             ORDER BY added_date DESC
             LIMIT 50
-        ''', (user_id, like_query, like_query))
+        """,
+            (user_id, like_query, like_query),
+        )
         return [dict(row) for row in cursor.fetchall()]
 
 
-def get_favorites_count_by_tag(user_id: str) -> Dict[str, int]:
-    """Получить количество избранных по каждому тегу"""
+def get_favorites_count_by_tag(user_id: str) -> dict[str, int]:
+    """Получить количество избранных по каждому тегу."""
     with get_db() as conn:
         cursor = conn.cursor()
-        cursor.execute('''
+        cursor.execute(
+            """
             SELECT COALESCE(tags, '') as tag, COUNT(*) as cnt
             FROM favorites
             WHERE user_id = ?
             GROUP BY tags
-        ''', (user_id,))
-        return {row['tag']: row['cnt'] for row in cursor.fetchall()}
+        """,
+            (user_id,),
+        )
+        return {row["tag"]: row["cnt"] for row in cursor.fetchall()}
 
 
-def get_all_favorites_for_export(user_id: str) -> List[Dict]:
-    """Получить все избранные книги для экспорта"""
+def get_all_favorites_for_export(user_id: str) -> list[dict]:
+    """Получить все избранные книги для экспорта."""
     with get_db() as conn:
         cursor = conn.cursor()
-        cursor.execute('''
+        cursor.execute(
+            """
             SELECT book_id, title, author, tags, notes, added_date
             FROM favorites
             WHERE user_id = ?
             ORDER BY added_date DESC
-        ''', (user_id,))
+        """,
+            (user_id,),
+        )
         return [dict(row) for row in cursor.fetchall()]
 
 
 # ────────────────────── Скачивания ──────────────────────
 
-def add_download(user_id: str, book_id: str, title: str, author: str, format: str):
-    """Добавить запись о скачивании"""
+
+def add_download(user_id: str, book_id: str, title: str, author: str, book_format: str):
+    """Добавить запись о скачивании и обновить счётчик в одной транзакции."""
     with get_db() as conn:
         cursor = conn.cursor()
-        cursor.execute('''
+        cursor.execute(
+            """
             INSERT INTO downloads (user_id, book_id, title, author, format)
             VALUES (?, ?, ?, ?, ?)
-        ''', (user_id, book_id, title, author, format))
+        """,
+            (user_id, book_id, title, author, book_format),
+        )
+        cursor.execute(
+            """
+            UPDATE users SET download_count = download_count + 1, last_seen = CURRENT_TIMESTAMP
+            WHERE user_id = ?
+        """,
+            (user_id,),
+        )
         conn.commit()
-        update_user_stats(user_id, download=True)
 
 
-def get_user_downloads(user_id: str, limit: int = 10) -> List[Dict]:
-    """Получить историю скачиваний пользователя"""
+def get_user_downloads(user_id: str, limit: int = 10) -> list[dict]:
+    """Получить историю скачиваний пользователя."""
     with get_db() as conn:
         cursor = conn.cursor()
-        cursor.execute('''
-            SELECT * FROM downloads 
-            WHERE user_id = ? 
-            ORDER BY download_date DESC 
+        cursor.execute(
+            """
+            SELECT * FROM downloads
+            WHERE user_id = ?
+            ORDER BY download_date DESC
             LIMIT ?
-        ''', (user_id, limit))
+        """,
+            (user_id, limit),
+        )
         return [dict(row) for row in cursor.fetchall()]
 
 
 # ────────────────────── Кэш книг ──────────────────────
 
+
 def cache_book(book):
-    """Закэшировать информацию о книге"""
+    """Закэшировать информацию о книге."""
     with get_db() as conn:
         cursor = conn.cursor()
         formats_json = json.dumps(book.formats)
-        genres_json = json.dumps(getattr(book, 'genres', []))
-        
-        series = getattr(book, 'series', '')
-        year = getattr(book, 'year', '')
-        annotation = getattr(book, 'annotation', '')
-        rating = getattr(book, 'rating', '')
-        author_link = getattr(book, 'author_link', '')
-        
-        cursor.execute('''
-            INSERT OR REPLACE INTO books_cache 
+        genres_json = json.dumps(getattr(book, "genres", []))
+
+        cursor.execute(
+            """
+            INSERT OR REPLACE INTO books_cache
             (book_id, title, author, link, formats, cover, size, series, year,
              annotation, genres, rating, author_link)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (book.id, book.title, book.author, book.link, formats_json, 
-              book.cover, book.size, series, year,
-              annotation, genres_json, rating, author_link))
+        """,
+            (
+                book.id,
+                book.title,
+                book.author,
+                book.link,
+                formats_json,
+                book.cover,
+                book.size,
+                getattr(book, "series", ""),
+                getattr(book, "year", ""),
+                getattr(book, "annotation", ""),
+                genres_json,
+                getattr(book, "rating", ""),
+                getattr(book, "author_link", ""),
+            ),
+        )
         conn.commit()
 
 
-def get_cached_book(book_id: str) -> Optional[Dict]:
-    """Получить книгу из кэша"""
+def get_cached_book(book_id: str) -> dict | None:
+    """Получить книгу из кэша."""
     with get_db() as conn:
         cursor = conn.cursor()
-        cursor.execute('SELECT * FROM books_cache WHERE book_id = ?', (book_id,))
+        cursor.execute("SELECT * FROM books_cache WHERE book_id = ?", (book_id,))
         row = cursor.fetchone()
         if row:
-            cursor.execute('''
-                UPDATE books_cache 
-                SET access_count = access_count + 1 
+            cursor.execute(
+                """
+                UPDATE books_cache
+                SET access_count = access_count + 1
                 WHERE book_id = ?
-            ''', (book_id,))
+            """,
+                (book_id,),
+            )
             conn.commit()
             book_dict = dict(row)
-            book_dict['formats'] = json.loads(book_dict['formats'])
-            # Безопасно парсим genres
+            book_dict["formats"] = json.loads(book_dict["formats"])
             try:
-                book_dict['genres'] = json.loads(book_dict.get('genres', '[]') or '[]')
+                book_dict["genres"] = json.loads(book_dict.get("genres", "[]") or "[]")
             except (json.JSONDecodeError, TypeError):
-                book_dict['genres'] = []
+                book_dict["genres"] = []
             return book_dict
         return None
 
 
 # ────────────────────── Статистика ──────────────────────
 
-def get_global_stats() -> Dict:
-    """Получить глобальную статистику"""
+
+def get_global_stats() -> dict:
+    """Получить глобальную статистику."""
     with get_db() as conn:
         cursor = conn.cursor()
-        
-        cursor.execute('SELECT COUNT(*) as total_users FROM users')
-        total_users = cursor.fetchone()['total_users']
-        
-        cursor.execute('''
-            SELECT COUNT(*) as active_users FROM users 
+
+        cursor.execute("SELECT COUNT(*) as total_users FROM users")
+        total_users = cursor.fetchone()["total_users"]
+
+        cursor.execute("""
+            SELECT COUNT(*) as active_users FROM users
             WHERE last_seen > datetime('now', '-7 days')
-        ''')
-        active_users = cursor.fetchone()['active_users']
-        
-        cursor.execute('SELECT COUNT(*) as total_searches FROM search_history')
-        total_searches = cursor.fetchone()['total_searches']
-        
-        cursor.execute('SELECT COUNT(*) as total_downloads FROM downloads')
-        total_downloads = cursor.fetchone()['total_downloads']
-        
-        cursor.execute('SELECT COUNT(*) as total_favorites FROM favorites')
-        total_favorites = cursor.fetchone()['total_favorites']
-        
-        cursor.execute('''
-            SELECT command, COUNT(*) as count 
-            FROM search_history 
-            GROUP BY command 
-            ORDER BY count DESC 
+        """)
+        active_users = cursor.fetchone()["active_users"]
+
+        cursor.execute("SELECT COUNT(*) as total_searches FROM search_history")
+        total_searches = cursor.fetchone()["total_searches"]
+
+        cursor.execute("SELECT COUNT(*) as total_downloads FROM downloads")
+        total_downloads = cursor.fetchone()["total_downloads"]
+
+        cursor.execute("SELECT COUNT(*) as total_favorites FROM favorites")
+        total_favorites = cursor.fetchone()["total_favorites"]
+
+        cursor.execute("""
+            SELECT command, COUNT(*) as count
+            FROM search_history
+            GROUP BY command
+            ORDER BY count DESC
             LIMIT 5
-        ''')
+        """)
         top_commands = [dict(row) for row in cursor.fetchall()]
-        
-        cursor.execute('''
-            SELECT book_id, title, author, COUNT(*) as count 
-            FROM downloads 
-            GROUP BY book_id 
-            ORDER BY count DESC 
+
+        cursor.execute("""
+            SELECT book_id, title, author, COUNT(*) as count
+            FROM downloads
+            GROUP BY book_id
+            ORDER BY count DESC
             LIMIT 10
-        ''')
+        """)
         top_books = [dict(row) for row in cursor.fetchall()]
-        
-        cursor.execute('''
-            SELECT author, COUNT(*) as count 
-            FROM downloads 
-            GROUP BY author 
-            ORDER BY count DESC 
+
+        cursor.execute("""
+            SELECT author, COUNT(*) as count
+            FROM downloads
+            GROUP BY author
+            ORDER BY count DESC
             LIMIT 10
-        ''')
+        """)
         top_authors = [dict(row) for row in cursor.fetchall()]
-        
+
         return {
-            'total_users': total_users,
-            'active_users': active_users,
-            'total_searches': total_searches,
-            'total_downloads': total_downloads,
-            'total_favorites': total_favorites,
-            'top_commands': top_commands,
-            'top_books': top_books,
-            'top_authors': top_authors
+            "total_users": total_users,
+            "active_users": active_users,
+            "total_searches": total_searches,
+            "total_downloads": total_downloads,
+            "total_favorites": total_favorites,
+            "top_commands": top_commands,
+            "top_books": top_books,
+            "top_authors": top_authors,
         }
 
 
-def get_user_stats(user_id: str) -> Dict:
-    """Получить статистику пользователя"""
+def get_user_stats(user_id: str) -> dict:
+    """Получить статистику пользователя."""
     with get_db() as conn:
         cursor = conn.cursor()
-        
+
         user = get_user(user_id)
         if not user:
             return {}
-        
-        cursor.execute('SELECT COUNT(*) as favorites_count FROM favorites WHERE user_id = ?', (user_id,))
-        favorites_count = cursor.fetchone()['favorites_count']
-        
+
+        cursor.execute("SELECT COUNT(*) as favorites_count FROM favorites WHERE user_id = ?", (user_id,))
+        favorites_count = cursor.fetchone()["favorites_count"]
+
         recent_searches = get_user_search_history(user_id, limit=5)
         recent_downloads = get_user_downloads(user_id, limit=5)
-        
-        cursor.execute('''
-            SELECT author, COUNT(*) as count 
-            FROM downloads 
-            WHERE user_id = ? 
-            GROUP BY author 
-            ORDER BY count DESC 
+
+        cursor.execute(
+            """
+            SELECT author, COUNT(*) as count
+            FROM downloads
+            WHERE user_id = ?
+            GROUP BY author
+            ORDER BY count DESC
             LIMIT 5
-        ''', (user_id,))
+        """,
+            (user_id,),
+        )
         favorite_authors = [dict(row) for row in cursor.fetchall()]
-        
+
         return {
-            'user_info': user,
-            'favorites_count': favorites_count,
-            'recent_searches': recent_searches,
-            'recent_downloads': recent_downloads,
-            'favorite_authors': favorite_authors
+            "user_info": user,
+            "favorites_count": favorites_count,
+            "recent_searches": recent_searches,
+            "recent_downloads": recent_downloads,
+            "favorite_authors": favorite_authors,
         }
 
 
 # ────────────────────── Очистка ──────────────────────
 
+
 def cleanup_old_data(days: int = 30):
-    """Очистить старые данные"""
+    """Очистить старые данные."""
     with get_db() as conn:
         cursor = conn.cursor()
-        
-        cursor.execute('''
-            DELETE FROM search_history 
+
+        cursor.execute(
+            """
+            DELETE FROM search_history
             WHERE timestamp < datetime('now', '-' || CAST(? AS TEXT) || ' days')
-        ''', (str(days),))
-        
-        cursor.execute('''
-            DELETE FROM books_cache 
+        """,
+            (str(days),),
+        )
+
+        cursor.execute(
+            """
+            DELETE FROM books_cache
             WHERE cached_date < datetime('now', '-' || CAST(? AS TEXT) || ' days')
             AND access_count < 2
-        ''', (str(days),))
-        
+        """,
+            (str(days),),
+        )
+
         conn.commit()

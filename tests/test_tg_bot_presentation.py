@@ -6,7 +6,7 @@ from src.tg_bot_presentation import escape_md, get_user_level, next_level_info, 
 
 class TestTgBotPresentation(unittest.TestCase):
     def test_escape_md_escapes_markdown_v1_chars(self):
-        self.assertEqual(escape_md("_*`["), "\\_\\*\\`\\[")
+        self.assertEqual(escape_md("_*`[]"), "\\_\\*\\`\\[\\]")
 
     def test_escape_md_handles_empty(self):
         self.assertEqual(escape_md(""), "")
