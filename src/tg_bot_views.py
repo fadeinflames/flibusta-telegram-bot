@@ -23,15 +23,23 @@ from src.tg_bot_presentation import (
     get_user_level,
     next_level_info,
 )
-from src.tg_bot_ui import breadcrumbs, screen, truncate
+from src.tg_bot_ui import DIVIDER, breadcrumbs, screen, truncate
 
 # ════════════════════════════════════════════════════════════
 #                      BOOK LIST / DETAILS
 # ════════════════════════════════════════════════════════════
 
 
+def _format_book_formats(book) -> str:
+    """Return a short comma-separated string of available format names."""
+    if not book.formats:
+        return ""
+    fmts = [f.strip("() ").lower() for f in book.formats]
+    return ", ".join(fmts)
+
+
 async def show_books_page(books, update: Update, context: CallbackContext, mes, page: int = 1):
-    """Render a page of search results with sorting and quick-download buttons."""
+    """Render a page of search results with book details in text and compact action buttons."""
     user_id = str(update.effective_user.id)
     per_page = await db_call(db.get_user_preference, user_id, "books_per_page", config.BOOKS_PER_PAGE_DEFAULT)
     total_books = len(books)
@@ -52,36 +60,51 @@ async def show_books_page(books, update: Update, context: CallbackContext, mes, 
     search_query = context.user_data.get("search_query", "")
 
     query_text = f"«{escape_md(search_query)}»" if search_query else "—"
-    header_text = f"📚 *Поиск книг*\n\nРезультаты по {search_type}: {query_text}\n"
-    stats = [f"Найдено: {total_books}"]
-    if total_pages > 1:
-        stats.append(f"Стр. {page}/{total_pages}")
-    header_text += "\n" + "  •  ".join(stats)
-
-    kb = []
-
-    # Sort buttons
-    kb.append(
-        [
-            InlineKeyboardButton("А-Я", callback_data="sort_title"),
-            InlineKeyboardButton("👤", callback_data="sort_author"),
-            InlineKeyboardButton("↺", callback_data="sort_default"),
-        ]
-    )
+    page_info = f"  •  стр. {page}/{total_pages}" if total_pages > 1 else ""
+    header_text = f"🔍 Результаты по {search_type}: {query_text}\nНайдено: {total_books}{page_info}\n"
 
     # Batch-check favorites (N+1 → 1 query)
     book_ids = [book.id for book in page_books]
     fav_set = await db_call(db.are_favorites, user_id, book_ids)
 
+    body_lines = []
     for i, book in enumerate(page_books, start=start_idx + 1):
-        star = "⭐" if book.id in fav_set else ""
-        title = truncate(book.title, 26)
-        author = truncate(book.author, 14)
-        text = f"{star}{i}. {title} · {author}"
+        star = " ⭐" if book.id in fav_set else ""
+        title = truncate(escape_md(book.title), 60)
+        author = escape_md(book.author) if book.author else "—"
+
+        meta_parts = []
+        if book.year:
+            meta_parts.append(book.year)
+        fmts = _format_book_formats(book)
+        if fmts:
+            meta_parts.append(fmts)
+        meta_str = f"  ({', '.join(meta_parts)})" if meta_parts else ""
+
+        body_lines.append(f"*{i}.* {title}{star}")
+        body_lines.append(f"     ✍️ {author}{meta_str}")
+
+    text = header_text + DIVIDER + "\n" + "\n".join(body_lines)
+
+    kb = []
+
+    # Sort buttons — only if there's something to sort
+    if total_books > 1:
         kb.append(
             [
-                InlineKeyboardButton(text, callback_data=f"book_{book.id}"),
-                InlineKeyboardButton("⬇️", callback_data=f"qd_{book.id}"),
+                InlineKeyboardButton("А-Я ↕", callback_data="sort_title"),
+                InlineKeyboardButton("👤 ↕", callback_data="sort_author"),
+                InlineKeyboardButton("↺ Исходный", callback_data="sort_default"),
+            ]
+        )
+
+    # Compact action buttons: rows of [number + title] [⬇️]
+    for i, book in enumerate(page_books, start=start_idx + 1):
+        btn_title = truncate(book.title, 30)
+        kb.append(
+            [
+                InlineKeyboardButton(f"{i}. {btn_title}", callback_data=f"book_{book.id}"),
+                InlineKeyboardButton("📥", callback_data=f"qd_{book.id}"),
             ]
         )
 
@@ -90,7 +113,7 @@ async def show_books_page(books, update: Update, context: CallbackContext, mes, 
     if page > 1:
         nav_buttons.append(InlineKeyboardButton("⬅️", callback_data=f"page_{page - 1}"))
     if total_pages > 1:
-        nav_buttons.append(InlineKeyboardButton(f"📄 {page}/{total_pages}", callback_data="current_page"))
+        nav_buttons.append(InlineKeyboardButton(f"{page}/{total_pages}", callback_data="current_page"))
     if page < total_pages:
         nav_buttons.append(InlineKeyboardButton("➡️", callback_data=f"page_{page + 1}"))
     if nav_buttons:
@@ -99,9 +122,9 @@ async def show_books_page(books, update: Update, context: CallbackContext, mes, 
     if total_pages > 5:
         quick_nav = []
         if page > 3:
-            quick_nav.append(InlineKeyboardButton("⏮", callback_data="page_1"))
+            quick_nav.append(InlineKeyboardButton("⏮ 1", callback_data="page_1"))
         if page < total_pages - 2:
-            quick_nav.append(InlineKeyboardButton("⏭", callback_data=f"page_{total_pages}"))
+            quick_nav.append(InlineKeyboardButton(f"{total_pages} ⏭", callback_data=f"page_{total_pages}"))
         if quick_nav:
             kb.append(quick_nav)
 
@@ -112,7 +135,7 @@ async def show_books_page(books, update: Update, context: CallbackContext, mes, 
     if mes:
         await context.bot.delete_message(chat_id=mes.chat_id, message_id=mes.message_id)
         await update.message.reply_text(
-            header_text,
+            text,
             parse_mode=ParseMode.MARKDOWN,
             reply_markup=reply_markup,
         )
@@ -120,7 +143,7 @@ async def show_books_page(books, update: Update, context: CallbackContext, mes, 
         query = update.callback_query
         try:
             await query.edit_message_text(
-                header_text,
+                text,
                 parse_mode=ParseMode.MARKDOWN,
                 reply_markup=reply_markup,
             )
@@ -131,7 +154,7 @@ async def show_books_page(books, update: Update, context: CallbackContext, mes, 
                 pass
             await context.bot.send_message(
                 chat_id=update.effective_chat.id,
-                text=header_text,
+                text=text,
                 parse_mode=ParseMode.MARKDOWN,
                 reply_markup=reply_markup,
             )
