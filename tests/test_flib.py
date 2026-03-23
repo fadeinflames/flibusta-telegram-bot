@@ -4,6 +4,7 @@ from bs4 import BeautifulSoup
 
 from src.flib import (
     Book,
+    _find_main_div,
     _fix_redirect_location,
     download_book,
     get_book_by_id,
@@ -40,6 +41,68 @@ class TestBookDataclass:
         assert b.title == ""
         assert b.formats == {}
         assert b.genres == []
+
+    def test_to_dict(self):
+        b = Book("42", title="T", author="A", formats={"(fb2)": "url"}, genres=["fiction"])
+        d = b.to_dict()
+        assert d["book_id"] == "42"
+        assert d["title"] == "T"
+        assert '"(fb2)"' in d["formats"]  # JSON string
+        assert '"fiction"' in d["genres"]
+
+    def test_from_dict_roundtrip(self):
+        original = Book(
+            "42",
+            title="Test Book",
+            author="Author",
+            link="http://example.com",
+            formats={"(fb2)": "http://example.com/fb2"},
+            genres=["fiction", "novel"],
+            annotation="A test",
+            series="Series 1",
+            year="2020",
+            rating="5",
+            author_link="http://example.com/a/1/",
+        )
+        d = original.to_dict()
+        restored = Book.from_dict(d)
+        assert restored.id == original.id
+        assert restored.title == original.title
+        assert restored.formats == original.formats
+        assert restored.genres == original.genres
+        assert restored.annotation == original.annotation
+
+    def test_from_dict_handles_raw_types(self):
+        """from_dict should handle both JSON strings and raw dicts/lists."""
+        d = {
+            "book_id": "1",
+            "title": "T",
+            "formats": {"(fb2)": "url"},  # already a dict
+            "genres": ["a", "b"],  # already a list
+        }
+        b = Book.from_dict(d)
+        assert b.formats == {"(fb2)": "url"}
+        assert b.genres == ["a", "b"]
+
+
+class TestFindMainDiv:
+    def test_finds_clear_block(self):
+        html = '<div class="clear-block" id="main"><p>Content</p></div>'
+        soup = BeautifulSoup(html, "html.parser")
+        div = _find_main_div(soup)
+        assert div is not None
+        assert div.find("p").text == "Content"
+
+    def test_falls_back_to_id_only(self):
+        html = '<div id="main"><p>Content</p></div>'
+        soup = BeautifulSoup(html, "html.parser")
+        div = _find_main_div(soup)
+        assert div is not None
+
+    def test_returns_none_when_missing(self):
+        html = "<div><p>No main</p></div>"
+        soup = BeautifulSoup(html, "html.parser")
+        assert _find_main_div(soup) is None
 
 
 # ────────────────────── Parsing tests with HTML fixtures ──────────────────────

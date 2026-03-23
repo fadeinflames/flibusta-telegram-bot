@@ -1,242 +1,82 @@
-# CLAUDE.md — Архитектура и важные факты о проекте
+Workflow Orchestration
+1. Plan Mode Default
 
-## Обзор
+    Enter plan mode for ANY non-trivial task (3+ steps or architectural decisions)
 
-Telegram-бот для поиска и скачивания книг с сайта Flibusta. Написан на Python 3.12, использует библиотеку `python-telegram-bot` v21+ (async). Запускается в Docker-контейнере.
+    If something goes sideways, STOP and re-plan immediately
 
-## Структура проекта
+    Use plan mode for verification steps, not just building
 
-```
-src/
-├── srv.py              — Точка входа. Загружает .env, инициализирует БД, регистрирует хэндлеры, запускает polling.
-├── config.py           — Все константы и настройки (сайт, таймауты, пагинация, уровни достижений, полки).
-├── flib.py             — Скрапинг Flibusta: поиск книг, получение деталей, скачивание файлов/обложек.
-├── database.py         — SQLite через sqlite3 (синхронный). Пользователи, история, избранное, скачивания, кэш книг.
-├── tg_bot.py           — Главный модуль бота: callback-роутер, текстовые команды, admin, inline, jobs.
-├── tg_bot_helpers.py   — Общие утилиты: декораторы, кэш, async-обёртки, обработка ошибок.
-├── tg_bot_views.py     — Функции отображения экранов (результаты, карточка книги, меню и др.).
-├── tg_bot_search.py    — Хэндлеры поисковых команд (/title, /author, /exact, /id, текстовый поиск).
-├── tg_bot_favorites.py — Управление избранным: отображение, toggle, полки, экспорт, книги автора.
-├── tg_bot_download.py  — Скачивание книг: по формату и быстрое скачивание.
-├── tg_bot_presentation.py — Форматирование (Markdown, уровни, полки).
-├── tg_bot_ui.py        — UI-хелперы экранов (breadcrumbs, screen, truncate).
-├── tg_bot_nav.py       — Управление навигационным стеком.
-├── tg_bot_cache.py     — In-memory TTL/LRU-кэш для результатов поиска.
-└── custom_logging.py   — JSON-логирование с RotatingFileHandler (10 МБ × 5 файлов).
-```
+    Write detailed specs upfront to reduce ambiguity
 
-## Ключевые архитектурные решения
+2. Subagent Strategy
 
-### Точка входа (`src/srv.py`)
+    Use subagents liberally to keep main context window clean
 
-- `load_dotenv(".env")` вызывается **до** любых импортов модулей, использующих `os.getenv()` на уровне модуля (config, tg_bot).
-- `db.init_database()` вызывается синхронно в `main()` до запуска бота.
-- `HTTPXRequest` настраивается с пулом соединений (8) и таймаутами 20 сек.
-- Поддержка прокси через переменную окружения `TELEGRAM_PROXY`.
-- Ежедневная задача `cleanup_job` запускается в 03:00 через `job_queue.run_daily()`.
+    Offload research, exploration, and parallel analysis to subagents
 
-### База данных (`src/database.py`)
+    For complex problems, throw more compute at it via subagents
 
-- **Синхронный** `sqlite3` (не aiosqlite). Все функции — обычные (не `async`).
-- `get_db()` — контекстный менеджер, каждый вызов открывает/закрывает соединение.
-- WAL-режим включается при инициализации (`PRAGMA journal_mode=WAL`).
-- Миграции встроены в `init_database()`: добавление новых колонок через `ALTER TABLE` с `try/except sqlite3.OperationalError`.
-- Пользовательские настройки хранятся как JSON-строка в колонке `preferences` таблицы `users`.
-- Теги (полки) в `favorites.tags` — это **простая строка** (ключ из `config.FAVORITE_SHELVES`), **не JSON-массив**.
+    One task per subagent for focused execution
 
-#### Таблицы
+3. Self-Improvement Loop
 
-| Таблица | Назначение |
-|---|---|
-| `users` | Пользователи, статистика, настройки (preferences JSON) |
-| `search_history` | История поисковых запросов |
-| `favorites` | Избранные книги (UNIQUE на user_id + book_id) |
-| `downloads` | История скачиваний |
-| `books_cache` | Кэш информации о книгах (аннотация, жанры, форматы и т.д.) |
-| `statistics` | Агрегированная статистика (не используется активно) |
+    After ANY correction from the user: update tasks/lessons.md with the pattern
 
-### Скрапинг (`src/flib.py`)
+    Write rules for yourself that prevent the same mistake
 
-- Per-thread `requests.Session` через `threading.local()` с retry-стратегией (3 попытки, backoff 1.0 сек, статусы 429/5xx). Потокобезопасно при вызовах через `asyncio.to_thread`.
-- In-memory LRU-кэш страниц (`_PAGE_CACHE`, OrderedDict, TTL 300 сек, макс. 128 записей).
-- `Book` — dataclass с полями: `id`, `title`, `author`, `link`, `formats` (dict), `cover`, `size`, `series`, `year`, `annotation`, `genres` (list), `rating`, `author_link`.
-- `formats` — dict, где ключ = текстовое представление формата (например `"(fb2)"`), значение = URL для скачивания.
-- Скачивание: запрос идёт на `{SITE}/b/{id}/epub` (или другой формат). Для epub/mobi и др. Flibusta может делать **редирект на `https://static.flibusta.is`** (конвертер). Ошибки соединения часто возникают именно при обращении к static.flibusta.is; при сбое в лог пишется `resolved_url` — финальный URL после редиректа.
+    Ruthlessly iterate on these lessons until mistake rate drops
 
-#### Методы поиска
+    Review lessons at session start for relevant project
 
-| Функция | URL Flibusta | Что ищет |
-|---|---|---|
-| `scrape_books_by_title(text)` | `/booksearch?ask=...&chb=on` | Книги по названию |
-| `scrape_books_by_author(text)` | `/booksearch?ask=...&cha=on` | Авторов → их книги |
-| `scrape_books_mbl(title, author)` | `/makebooklist?ab=ab1&t=...&ln=...&sort=sd2` | Точный поиск |
-| `get_book_by_id(book_id)` | `/b/{book_id}/` | Детали книги |
-| `get_other_books_by_author(url)` | Страница автора | Другие книги автора |
+4. Verification Before Done
 
-- `scrape_books_by_author` возвращает `list[list[Book]]` (список авторов → список книг каждого).
-- `get_book_by_id` парсит аннотацию тремя способами (заголовок "Аннотация", div.content, все `<p>`), жанры через `/g/`, серию через `/sequence/`.
+    Never mark a task complete without proving it works
 
-### Бот (модули `src/tg_bot*.py`)
+    Diff behavior for yourself that main and your changes when relevant
 
-Основная логика разделена на модули:
-- `tg_bot_helpers.py` — декораторы (`check_access`, `rate_limit`, `check_callback_access`), кэш, `db_call`/`flib_call`, `perform_title_search`.
-- `tg_bot_views.py` — все функции отображения (`show_books_page`, `show_book_details_with_favorite`, `show_main_menu`, и др.). Использует `are_favorites` для batch-проверки избранного (вместо N+1 запросов).
-- `tg_bot_search.py` — хэндлеры поисковых команд. Общая логика поиска по названию с fallback вынесена в `perform_title_search`.
-- `tg_bot_favorites.py` — управление избранным.
-- `tg_bot_download.py` — скачивание книг (стриминг через `io.BytesIO`).
-- `tg_bot.py` — callback-роутер `button()`, текстовые команды, admin, inline, jobs. Реэкспортирует всё для `srv.py`.
+    Ask yourself: "Would a staff engineer approve this?"
 
-#### Контроль доступа
+    Run tests, check logs, demonstrate correctness
 
-- `ALLOWED_USERS` загружается из env `ALLOWED_USERS` (через запятую). Если пустой — доступ открыт для всех.
-- Первый пользователь в списке считается **администратором** (доступ к `/stats`, `/users`).
-- Три декоратора:
-  - `@check_access` — для команд (через `update.message`).
-  - `@check_callback_access` — для callback queries.
-  - `@rate_limit(sec)` — rate-limiting по `context.user_data`.
+5. Demand Elegance (Balanced)
 
-#### Markdown
+    For non-trivial changes: pause and ask "is there a more elegant way?"
 
-- Используется **`ParseMode.MARKDOWN`** (v1), **не** MarkdownV2.
-- `_escape_md()` экранирует только `_`, `*`, `` ` ``, `[` (символы Markdown v1).
+    If a fix feels hacky: "Knowing everything I know now, implement the elegant solution"
 
-#### Навигация
+    Skip this for simple, obvious fixes — don't over-engineer
 
-- Навигационный стек в `context.user_data["nav_stack"]` (макс. 10 записей).
-- `_push_nav` / `_pop_nav` / `_render_nav_entry` — управление "назад".
-- Типы записей: `results`, `favorites`, `history`, `stats`, `settings`, `search_menu`, `main_menu`.
+    Challenge your own work before presenting it
 
-#### In-memory кэш поиска
+6. Autonomous Bug Fixing
 
-- `_SEARCH_CACHE` — dict с TTL (`config.SEARCH_CACHE_TTL_SEC` = 120 сек, макс. 256 записей).
-- Ключи: `title:запрос`, `author:запрос`, `exact:title|author`, `inline:запрос`.
+    When given a bug report: just fix it. Don't ask for hand-holding
 
-#### Callback data протокол
+    Point at logs, errors, failing tests — then resolve them
 
-| Паттерн | Действие |
-|---|---|
-| `book_{id}` | Открыть карточку книги |
-| `page_{n}` | Страница результатов |
-| `toggle_favorite_{id}` | Добавить/удалить из избранного |
-| `get_book_by_format_{id}\|{url_encoded_format}` | Скачать в формате |
-| `qd_{id}` | Быстрое скачивание (формат по умолчанию) |
-| `pick_shelf_{id}` | Выбор полки |
-| `set_tag_{id}_{tag}` | Установить полку |
-| `book_meta_{id}` | Показать подробные метаданные книги |
-| `full_ann_{id}` | Показать полную аннотацию |
-| `author_books_{id}` | Другие книги автора |
-| `sort_title` / `sort_author` / `sort_default` | Сортировка результатов |
-| `show_favorites_{page}` | Страница избранного |
-| `fav_book_{id}` | Книга из избранного |
-| `shelf_{tag}_{page}` | Полка в избранном |
-| `search_favs` | Поиск в избранном (ожидает текстовый ввод) |
-| `export_favs` | Экспорт избранного в .txt |
-| `set_per_page_{n}` | Настройка пагинации |
-| `set_format_{fmt}` | Формат по умолчанию |
-| `repeat_search` | Повтор последнего поиска |
-| `main_menu` / `menu_search` / `show_history` / `show_my_stats` / `show_settings` | Навигация |
-| `nav_back` / `back_to_results` | Назад по стеку |
+    Zero context switching required from the user
 
-#### Deep Linking
+    Go fix failing CI tests without being told how
 
-- `/start book_{id}` — открывает карточку книги (для шаринга через URL `t.me/bot?start=book_123`).
+Task Management
 
-#### Пользовательские настройки
+    Plan First: Write plan to tasks/todo.md with checkable items
 
-- `books_per_page` — 5, 10 или 20 (дефолт 10).
-- `default_format` — формат скачивания по умолчанию (дефолт `fb2`).
+    Verify Plan: Check in before starting implementation
 
-#### Уровни достижений
+    Track Progress: Mark items complete as you go
 
-Определяются по количеству поисков и скачиваний (`config.ACHIEVEMENT_LEVELS`):
-📖 Новичок → 📚 Читатель → 📕 Библиофил → 🏛 Книгочей → 🎓 Эрудит → 👑 Мастер.
+    Explain Changes: High-level summary at each step
 
-#### Полки для избранного
+    Document Results: Add review section to tasks/todo.md
 
-Предустановленные полки (`config.FAVORITE_SHELVES`):
-- `want` — 📕 Хочу прочитать
-- `reading` — 📗 Читаю
-- `done` — 📘 Прочитано
-- `recommend` — 📙 Рекомендую
+    Capture Lessons: Update tasks/lessons.md after corrections
 
-## Переменные окружения
+Core Principles
 
-| Переменная | Описание | Обязательна |
-|---|---|---|
-| `TOKEN` | Токен Telegram бота | ✅ |
-| `ALLOWED_USERS` | ID пользователей через запятую | ❌ (без неё доступ для всех) |
-| `FLIBUSTA_SITE` | URL сайта Flibusta | ❌ (по умолчанию `http://flibusta.is`) |
-| `TELEGRAM_PROXY` | URL прокси для Telegram API | ❌ |
-| `DATA_DIR` | Директория для БД | ❌ (по умолчанию `./data`) |
-| `BOOKS_DIR` | Директория для обложек | ❌ (по умолчанию `./books`) |
-| `LOGS_DIR` | Директория для логов | ❌ (по умолчанию `./logs`) |
+    Simplicity First: Make every change as simple as possible. Impact minimal code.
 
-## Docker
+    No Laziness: Find root causes. No temporary fixes. Senior developer standards.
 
-- Образ на базе `python:3.12-slim`.
-- `PYTHONPATH=/srv`, рабочая директория `/srv`.
-- Три volume: `/srv/books`, `/srv/logs`, `/srv/data`.
-- Entrypoint: `python src/srv.py`.
-- `docker-compose.yml` монтирует `./books`, `./logs`, `./data` в контейнер.
-
-## Важные особенности
-
-1. **Все функции БД и парсера — синхронные.** В async-хэндлерах они вызываются через `asyncio.to_thread`, чтобы не блокировать event loop.
-2. **`_book_from_cache` — async-обёртка** над синхронным кэшем/парсером; при промахе кэша может вызвать HTTP-запрос к Flibusta.
-3. **Callback data ограничена 64 байтами** (лимит Telegram). Формат книги URL-кодируется и передаётся через `|` разделитель.
-4. **Ошибки при редактировании сообщений** (например, если предыдущее сообщение было фото) обрабатываются через `_safe_edit_or_send` — удаляет старое и шлёт новое.
-5. **Обложки** скачиваются в `{BOOKS_DIR}/{book_id}/cover.jpg` и удаляются по cron-задаче через 30 дней.
-6. **Inline mode** поддерживает быстрый поиск по названию (минимум 3 символа), результаты кэшируются 10 секунд на стороне Telegram.
-
-## Команды бота
-
-| Команда | Описание |
-|---|---|
-| `/start` | Приветствие + deep linking |
-| `/help` | Справка |
-| `/title <название>` | Поиск по названию |
-| `/author <фамилия>` | Поиск по автору |
-| `/exact <назв \| автор>` | Точный поиск |
-| `/id <номер>` | Книга по ID |
-| `/search` | Подсказка по поиску |
-| `/favorites` | Избранное |
-| `/history` | История поиска |
-| `/downloads` | История скачиваний |
-| `/mystats` | Личная статистика |
-| `/settings` | Настройки |
-| `/setpage <5\|10\|20>` | Книг на странице |
-| `/setformat <формат>` | Формат по умолчанию |
-| `/users` | Список пользователей (админ) |
-| `/stats` | Общая статистика (админ) |
-
-## Тесты и инструменты разработки
-
-```bash
-make test       # pytest tests/ -v
-make lint       # ruff check + format --check
-make format     # ruff format + check --fix
-```
-
-Тесты находятся в `tests/`:
-- `conftest.py` — фикстуры: изолированная SQLite БД через `tmp_path`.
-- `test_database.py` — юнит-тесты всех функций `database.py`.
-- `test_flib.py` — тесты парсинга HTML и скачивания (моки, HTML-фикстуры).
-- `test_tg_bot_presentation.py` — форматирование, уровни, полки.
-- `test_tg_bot_cache.py` — TTL/LRU-кэш.
-- `test_tg_bot_ui_nav.py` — UI-хелперы и навигация.
-
-CI (``.github/workflows/ci.yml``): lint → test → docker build.
-
-## Зависимости
-
-- `python-telegram-bot[job-queue]` ^21.9 — Telegram Bot API
-- `python-dotenv` — загрузка .env
-- `requests` — HTTP-клиент для Flibusta
-- `beautifulsoup4` + `lxml` — парсинг HTML
-- `json-log-formatter` — JSON-логирование
-
-### Dev-зависимости
-
-- `pytest` ^8.0 — тесты
-- `pytest-asyncio` ^0.24 — async-тесты
-- `ruff` ^0.9 — линтер и форматтер
+    Minimal Impact: Only touch what's necessary. No side effects with new bugs.

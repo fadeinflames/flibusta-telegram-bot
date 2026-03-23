@@ -18,9 +18,9 @@ class TestUiHelpers(unittest.TestCase):
         self.assertEqual(breadcrumbs("🏠 Меню", "📚 Результаты"), "🏠 Меню > 📚 Результаты")
 
     def test_screen(self):
-        text = screen("📚 *Title*", "Body", "🏠 Меню")
-        self.assertIn("📚 *Title*", text)
-        self.assertIn("_🏠 Меню_", text)
+        text = screen("📚 <b>Title</b>", "Body", "🏠 Меню")
+        self.assertIn("📚 <b>Title</b>", text)
+        self.assertIn("<i>🏠 Меню</i>", text)
         self.assertIn("Body", text)
 
 

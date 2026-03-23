@@ -16,9 +16,10 @@ from src.tg_bot_helpers import (
     db_call,
     flib_call,
     safe_edit_or_send,
+    save_search_results,
 )
 from src.tg_bot_nav import push_nav as _push_nav
-from src.tg_bot_presentation import escape_md, shelf_label
+from src.tg_bot_presentation import escape_html, shelf_label
 from src.tg_bot_ui import breadcrumbs, screen, truncate
 from src.tg_bot_views import (
     show_book_details_with_favorite,
@@ -46,7 +47,7 @@ async def show_favorites(update: Update, context: CallbackContext, *, page: int 
 
     if not favorites and not total_all:
         text = screen(
-            "⭐ *Избранное*",
+            "⭐ <b>Избранное</b>",
             "У вас пока нет избранных книг.\n\nДобавляйте книги в избранное для быстрого доступа!",
             breadcrumbs("🏠 Меню", "⭐ Избранное"),
         )
@@ -56,16 +57,16 @@ async def show_favorites(update: Update, context: CallbackContext, *, page: int 
         if update.callback_query:
             await safe_edit_or_send(update.callback_query, context, text, reply_markup)
         else:
-            await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN, reply_markup=reply_markup)
+            await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=reply_markup)
         return
 
     total_pages = math.ceil(total / FAVORITES_PER_PAGE) if total > 0 else 1
 
     shelf_name = shelf_label(tag_filter) if tag_filter else "Все"
-    body = f"*Полка:* {shelf_name}\nВсего: {total} книг"
+    body = f"<b>Полка:</b> {shelf_name}\nВсего: {total} книг"
     if total_pages > 1:
         body += f"  •  Стр. {page}/{total_pages}"
-    text = screen("⭐ *Избранные книги*", body, breadcrumbs("🏠 Меню", "⭐ Избранное"))
+    text = screen("⭐ <b>Избранные книги</b>", body, breadcrumbs("🏠 Меню", "⭐ Избранное"))
 
     kb = []
 
@@ -93,7 +94,7 @@ async def show_favorites(update: Update, context: CallbackContext, *, page: int 
             button_text = f"{shelf_icon}{i}. {title} — {author}"
             kb.append([InlineKeyboardButton(button_text, callback_data=f"fav_book_{fav['book_id']}")])
     else:
-        text += "\n_На этой полке пока пусто_\n"
+        text += "\n<i>На этой полке пока пусто</i>\n"
 
     # Pagination
     nav_buttons = []
@@ -124,7 +125,7 @@ async def show_favorites(update: Update, context: CallbackContext, *, page: int 
     if update.callback_query:
         await safe_edit_or_send(update.callback_query, context, text, reply_markup)
     else:
-        await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN, reply_markup=reply_markup)
+        await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=reply_markup)
 
 
 async def toggle_favorite(book_id: str, update: Update, context: CallbackContext):
@@ -157,7 +158,7 @@ async def show_tag_picker(book_id: str, update: Update, context: CallbackContext
         await update.callback_query.answer("Сначала добавьте в избранное", show_alert=True)
         return
 
-    text = "📚 *Выберите полку для книги:*"
+    text = "📚 <b>Выберите полку для книги:</b>"
     kb = []
     for tag_key, tag_label in config.FAVORITE_SHELVES.items():
         kb.append([InlineKeyboardButton(tag_label, callback_data=f"set_tag_{book_id}_{tag_key}")])
@@ -223,16 +224,12 @@ async def show_other_books_by_author(book_id: str, update: Update, context: Call
     )
 
     if not other_books:
-        text = f"👤 *{escape_md(book.author)}*\n\nДругих книг не найдено."
+        text = f"👤 <b>{escape_html(book.author)}</b>\n\nДругих книг не найдено."
         kb = [[InlineKeyboardButton("◀️ Назад", callback_data=f"book_{book_id}")]]
         await safe_edit_or_send(update.callback_query, context, text, InlineKeyboardMarkup(kb))
         return
 
-    context.user_data["search_results"] = other_books
-    context.user_data["search_results_original"] = list(other_books)
-    context.user_data["search_type"] = f"автору {book.author}"
-    context.user_data["search_query"] = book.author
-    context.user_data["current_results_page"] = 1
+    save_search_results(context, other_books, f"автору {book.author}", book.author)
 
     _push_nav(context, {"type": "results", "page": 1})
     await show_books_page(other_books, update, context, None, page=1)

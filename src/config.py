@@ -18,6 +18,7 @@ REQUEST_TIMEOUT = (10, 30)
 DOWNLOAD_TIMEOUT = (25, 90)
 REQUEST_MAX_RETRIES = 3
 REQUEST_RETRY_BACKOFF = 1.0  # seconds, multiplied by attempt number
+MAX_DOWNLOAD_SIZE = 50 * 1024 * 1024  # 50 MB — abort download if file exceeds this
 
 # ──────────────────── Page cache ────────────────────
 PAGE_CACHE_TTL_SEC = 300

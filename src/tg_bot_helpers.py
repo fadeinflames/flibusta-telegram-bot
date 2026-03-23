@@ -24,8 +24,11 @@ _SEARCH_CACHE = TTLCache(
     max_size=config.SEARCH_CACHE_MAX_SIZE,
 )
 
-ALLOWED_USERS = os.getenv("ALLOWED_USERS", "").split(",")
-ALLOWED_USERS = [uid.strip() for uid in ALLOWED_USERS if uid.strip()]
+_allowed_users_raw = os.getenv("ALLOWED_USERS", "").split(",")
+_allowed_users_list = [uid.strip() for uid in _allowed_users_raw if uid.strip()]
+
+ALLOWED_USERS: set[str] = set(_allowed_users_list)
+ADMIN_USER_ID: str | None = _allowed_users_list[0] if _allowed_users_list else None
 
 FAVORITES_PER_PAGE = config.FAVORITES_PER_PAGE_DEFAULT
 
@@ -63,7 +66,7 @@ def inc_error_stat(context: CallbackContext, error: Exception):
     stats[name] = stats.get(name, 0) + 1
 
 
-async def safe_edit_or_send(query, context: CallbackContext, text: str, reply_markup, parse_mode=ParseMode.MARKDOWN):
+async def safe_edit_or_send(query, context: CallbackContext, text: str, reply_markup, parse_mode=ParseMode.HTML):
     """Edit message text; if it fails (previous was a photo), delete and send new."""
     try:
         await query.edit_message_text(text, parse_mode=parse_mode, reply_markup=reply_markup)
@@ -89,7 +92,7 @@ async def send_or_edit_message(update: Update, context: CallbackContext, text: s
             await update.callback_query.edit_message_text(
                 text,
                 reply_markup=reply_markup,
-                parse_mode=ParseMode.MARKDOWN,
+                parse_mode=ParseMode.HTML,
             )
         except (BadRequest, Forbidden):
             try:
@@ -100,14 +103,14 @@ async def send_or_edit_message(update: Update, context: CallbackContext, text: s
                 chat_id=update.effective_chat.id,
                 text=text,
                 reply_markup=reply_markup,
-                parse_mode=ParseMode.MARKDOWN,
+                parse_mode=ParseMode.HTML,
             )
     else:
         await context.bot.send_message(
             chat_id=update.effective_chat.id,
             text=text,
             reply_markup=reply_markup,
-            parse_mode=ParseMode.MARKDOWN,
+            parse_mode=ParseMode.HTML,
         )
 
 
@@ -118,20 +121,7 @@ async def book_from_cache(book_id: str):
     """Restore a Book from DB cache, or fetch from Flibusta."""
     cached = await db_call(db.get_cached_book, book_id)
     if cached:
-        book = flib.Book(book_id)
-        book.title = cached["title"]
-        book.author = cached["author"]
-        book.link = cached["link"]
-        book.formats = cached["formats"]
-        book.cover = cached["cover"]
-        book.size = cached["size"]
-        book.series = cached.get("series", "")
-        book.year = cached.get("year", "")
-        book.annotation = cached.get("annotation", "")
-        book.genres = cached.get("genres", [])
-        book.rating = cached.get("rating", "")
-        book.author_link = cached.get("author_link", "")
-        return book
+        return flib.Book.from_dict(cached)
     book = await flib_call(flib.get_book_by_id, book_id)
     if book:
         await db_call(db.cache_book, book)
@@ -141,16 +131,32 @@ async def book_from_cache(book_id: str):
 # ────────────────────── Search helpers ──────────────────────
 
 
+def save_search_results(context: CallbackContext, books: list, search_type: str, query: str):
+    """Save search results to user_data (deduplicated pattern)."""
+    context.user_data["search_results"] = books
+    context.user_data["search_results_original"] = list(books)
+    context.user_data["search_type"] = search_type
+    context.user_data["search_query"] = query
+    context.user_data["current_results_page"] = 1
+
+
+MAX_SPLIT_VARIANTS = 2
+
+
 async def try_split_search(query: str):
     """Try splitting query into title + author and search.
 
     Returns (books, title_part, author_part) or (None, None, None).
+    Limited to MAX_SPLIT_VARIANTS to avoid excessive HTTP requests.
     """
     words = query.split()
     if len(words) < 2:
         return None, None, None
 
-    for author_words in range(1, len(words)):
+    max_variants = min(MAX_SPLIT_VARIANTS, len(words) - 1)
+
+    # Try exact search splits
+    for author_words in range(1, max_variants + 1):
         title_part = " ".join(words[:-author_words])
         author_part = " ".join(words[-author_words:])
         if not title_part or not author_part:
@@ -165,7 +171,8 @@ async def try_split_search(query: str):
         if books:
             return books, title_part, author_part
 
-    for author_words in range(1, len(words)):
+    # Try author search splits
+    for author_words in range(1, max_variants + 1):
         title_part = " ".join(words[:-author_words])
         author_part = " ".join(words[-author_words:])
         if not title_part or not author_part:
@@ -232,7 +239,7 @@ def check_access(func):
             user_id=user_id,
             username=update.effective_user.username,
             full_name=update.effective_user.full_name,
-            is_admin=(ALLOWED_USERS and user_id == ALLOWED_USERS[0]),
+            is_admin=(ADMIN_USER_ID is not None and user_id == ADMIN_USER_ID),
         )
 
         if not ALLOWED_USERS:

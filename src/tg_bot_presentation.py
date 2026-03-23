@@ -1,13 +1,17 @@
+import html
+
 from src import config
 
 
-def escape_md(text: str) -> str:
-    """Escape MarkdownV1 special characters in user-provided text."""
+def escape_html(text: str) -> str:
+    """Escape HTML special characters in user-provided text."""
     if not text:
         return ""
-    for ch in ("_", "*", "`", "[", "]"):
-        text = text.replace(ch, f"\\{ch}")
-    return text
+    return html.escape(str(text), quote=False)
+
+
+# Keep old name as alias for backward compat during migration
+escape_md = escape_html
 
 
 def get_user_level(search_count: int, download_count: int) -> str:

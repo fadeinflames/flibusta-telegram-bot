@@ -1,10 +1,13 @@
 import io
+import json
 import os
 import re
+import shutil
 import threading
 import time
 import urllib.parse
 from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
 import requests
@@ -79,6 +82,9 @@ _page_cache_lock = threading.Lock()
 _PAGE_CACHE: "OrderedDict[str, tuple[float, BeautifulSoup]]" = OrderedDict()
 
 
+# ────────────────────── Book dataclass ──────────────────────
+
+
 @dataclass
 class Book:
     id: str
@@ -98,6 +104,64 @@ class Book:
     def __str__(self):
         return f"{self.title} - {self.author} ({self.id})"
 
+    def to_dict(self) -> dict:
+        """Serialize Book to a plain dict (for DB cache)."""
+        return {
+            "book_id": self.id,
+            "title": self.title,
+            "author": self.author,
+            "link": self.link,
+            "formats": json.dumps(self.formats),
+            "cover": self.cover,
+            "size": self.size,
+            "series": self.series,
+            "year": self.year,
+            "annotation": self.annotation,
+            "genres": json.dumps(self.genres),
+            "rating": self.rating,
+            "author_link": self.author_link,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "Book":
+        """Restore Book from a DB-cache dict (with JSON-encoded fields)."""
+        formats = data.get("formats", "{}")
+        if isinstance(formats, str):
+            formats = json.loads(formats)
+        genres = data.get("genres", "[]")
+        if isinstance(genres, str):
+            try:
+                genres = json.loads(genres or "[]")
+            except (json.JSONDecodeError, TypeError):
+                genres = []
+
+        return cls(
+            id=data.get("book_id", data.get("id", "")),
+            title=data.get("title", ""),
+            author=data.get("author", ""),
+            link=data.get("link", ""),
+            formats=formats,
+            cover=data.get("cover", ""),
+            size=data.get("size", ""),
+            series=data.get("series", ""),
+            year=data.get("year", ""),
+            annotation=data.get("annotation", ""),
+            genres=genres,
+            rating=data.get("rating", ""),
+            author_link=data.get("author_link", ""),
+        )
+
+
+# ────────────────────── Helpers ──────────────────────
+
+
+def _find_main_div(soup: BeautifulSoup):
+    """Find the main content div on a Flibusta page."""
+    div = soup.find("div", attrs={"class": "clear-block", "id": "main"})
+    if not div:
+        div = soup.find("div", id="main")
+    return div
+
 
 def get_page(url):
     """Получение и кэширование страницы."""
@@ -115,7 +179,7 @@ def get_page(url):
         session = _get_session()
         response = session.get(url, timeout=config.REQUEST_TIMEOUT)
         response.raise_for_status()
-        soup = BeautifulSoup(response.text, "html.parser")
+        soup = BeautifulSoup(response.text, "lxml")
 
         with _page_cache_lock:
             _PAGE_CACHE[url] = (now, soup)
@@ -140,11 +204,9 @@ def scrape_books_by_title(text: str) -> list[Book] | None:
     if not sp:
         return None
 
-    target_div = sp.find("div", attrs={"class": "clear-block", "id": "main"})
+    target_div = _find_main_div(sp)
     if not target_div:
-        target_div = sp.find("div", id="main")
-        if not target_div:
-            return None
+        return None
 
     target_ul_list = target_div.find_all("ul")
     if len(target_ul_list) == 0:
@@ -188,8 +250,77 @@ def scrape_books_by_title(text: str) -> list[Book] | None:
     return result if result else None
 
 
+def _parse_author_page(author_link: str) -> list[Book]:
+    """Parse a single author page and return list of books."""
+    sp_author = get_page(author_link)
+    if not sp_author:
+        return []
+
+    author_h1 = sp_author.find("h1", attrs={"class": "title"})
+    if not author_h1:
+        return []
+    author = author_h1.text.strip()
+
+    target_form = sp_author.find("form", attrs={"method": "POST"})
+    if not target_form:
+        return []
+
+    target_p_translates = target_form.find("h3", string="Переводы")
+    if target_p_translates:
+        sibling = target_p_translates.next_sibling
+        while sibling:
+            next_sibling = sibling.next_sibling
+            sibling.extract()
+            sibling = next_sibling
+
+    result = []
+
+    svg_elements = target_form.find_all("svg")
+    for svg in svg_elements:
+        book_link = svg.find_next_sibling("a")
+        if book_link:
+            href = book_link.get("href", "")
+            if href.startswith("/b/"):
+                book_id = href.replace("/b/", "")
+                book = Book(book_id)
+                book.title = book_link.text.strip()
+                book.author = author
+                book.author_link = author_link
+                book.link = config.SITE + href + "/"
+                result.append(book)
+
+    if not result:
+        checkboxes = target_form.find_all("input", attrs={"type": "checkbox"})
+        for cb in checkboxes:
+            book_link = cb.find_next_sibling("a")
+            if book_link:
+                href = book_link.get("href", "")
+                if href.startswith("/b/"):
+                    book_id = href.replace("/b/", "")
+                    book = Book(book_id)
+                    book.title = book_link.text.strip()
+                    book.author = author
+                    book.author_link = author_link
+                    book.link = config.SITE + href + "/"
+                    result.append(book)
+
+    if not result:
+        book_links = target_form.find_all("a", href=re.compile(r"^/b/\d+$"))
+        for book_link in book_links:
+            href = book_link.get("href", "")
+            book_id = href.replace("/b/", "")
+            book = Book(book_id)
+            book.title = book_link.text.strip()
+            book.author = author
+            book.author_link = author_link
+            book.link = config.SITE + href + "/"
+            result.append(book)
+
+    return result
+
+
 def scrape_books_by_author(text: str) -> list[list[Book]] | None:
-    """Поиск книг по автору."""
+    """Поиск книг по автору (параллельная загрузка страниц авторов)."""
     query_text = urllib.parse.quote(text)
     url = f"{config.SITE}/booksearch?ask={query_text}&cha=on"
 
@@ -197,11 +328,9 @@ def scrape_books_by_author(text: str) -> list[list[Book]] | None:
     if not sp:
         return None
 
-    target_div = sp.find("div", attrs={"class": "clear-block", "id": "main"})
+    target_div = _find_main_div(sp)
     if not target_div:
-        target_div = sp.find("div", id="main")
-        if not target_div:
-            return None
+        return None
 
     target_ul_list = target_div.find_all("ul")
     if len(target_ul_list) == 0:
@@ -223,75 +352,13 @@ def scrape_books_by_author(text: str) -> list[list[Book]] | None:
     if not authors_links:
         return None
 
+    # Parallel fetch of author pages
     final_res = []
-
-    for author_link in authors_links:
-        sp_author = get_page(author_link)
-        if not sp_author:
-            continue
-
-        author_h1 = sp_author.find("h1", attrs={"class": "title"})
-        if not author_h1:
-            continue
-        author = author_h1.text.strip()
-
-        target_form = sp_author.find("form", attrs={"method": "POST"})
-        if not target_form:
-            continue
-
-        target_p_translates = target_form.find("h3", string="Переводы")
-        if target_p_translates:
-            sibling = target_p_translates.next_sibling
-            while sibling:
-                next_sibling = sibling.next_sibling
-                sibling.extract()
-                sibling = next_sibling
-
-        result = []
-
-        svg_elements = target_form.find_all("svg")
-        for svg in svg_elements:
-            book_link = svg.find_next_sibling("a")
-            if book_link:
-                href = book_link.get("href", "")
-                if href.startswith("/b/"):
-                    book_id = href.replace("/b/", "")
-                    book = Book(book_id)
-                    book.title = book_link.text.strip()
-                    book.author = author
-                    book.author_link = author_link
-                    book.link = config.SITE + href + "/"
-                    result.append(book)
-
-        if not result:
-            checkboxes = target_form.find_all("input", attrs={"type": "checkbox"})
-            for cb in checkboxes:
-                book_link = cb.find_next_sibling("a")
-                if book_link:
-                    href = book_link.get("href", "")
-                    if href.startswith("/b/"):
-                        book_id = href.replace("/b/", "")
-                        book = Book(book_id)
-                        book.title = book_link.text.strip()
-                        book.author = author
-                        book.author_link = author_link
-                        book.link = config.SITE + href + "/"
-                        result.append(book)
-
-        if not result:
-            book_links = target_form.find_all("a", href=re.compile(r"^/b/\d+$"))
-            for book_link in book_links:
-                href = book_link.get("href", "")
-                book_id = href.replace("/b/", "")
-                book = Book(book_id)
-                book.title = book_link.text.strip()
-                book.author = author
-                book.author_link = author_link
-                book.link = config.SITE + href + "/"
-                result.append(book)
-
-        if result:
-            final_res.append(result)
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        results = pool.map(_parse_author_page, authors_links)
+        for books in results:
+            if books:
+                final_res.append(books)
 
     return final_res if final_res else None
 
@@ -347,11 +414,9 @@ def get_book_by_id(book_id):
     if not sp:
         return None
 
-    target_div = sp.find("div", attrs={"class": "clear-block", "id": "main"})
+    target_div = _find_main_div(sp)
     if not target_div:
-        target_div = sp.find("div", id="main")
-        if not target_div:
-            return None
+        return None
 
     target_h1 = target_div.find("h1", attrs={"class": "title"})
     if not target_h1:
@@ -515,8 +580,12 @@ def download_book_cover(book: Book):
         )
 
 
+class DownloadTooLargeError(Exception):
+    """Raised when a download exceeds MAX_DOWNLOAD_SIZE."""
+
+
 def download_book(book: Book, b_format: str) -> tuple[io.BytesIO | None, str | None]:
-    """Скачивание книги в указанном формате (стриминг в буфер)."""
+    """Скачивание книги в указанном формате (стриминг в буфер с лимитом размера)."""
     if not book or b_format not in book.formats:
         return None, None
 
@@ -527,6 +596,11 @@ def download_book(book: Book, b_format: str) -> tuple[io.BytesIO | None, str | N
 
         with session.get(book_url, timeout=config.DOWNLOAD_TIMEOUT, stream=True) as b_response:
             b_response.raise_for_status()
+
+            # Check Content-Length if available
+            content_length = b_response.headers.get("content-length")
+            if content_length and int(content_length) > config.MAX_DOWNLOAD_SIZE:
+                raise DownloadTooLargeError(f"File size {int(content_length)} exceeds limit {config.MAX_DOWNLOAD_SIZE}")
 
             # Получаем имя файла из заголовков
             content_disposition = b_response.headers.get("content-disposition", "")
@@ -548,13 +622,23 @@ def download_book(book: Book, b_format: str) -> tuple[io.BytesIO | None, str | N
                     b_filename = name_part + ext_part
 
             buf = io.BytesIO()
+            total = 0
             for chunk in b_response.iter_content(chunk_size=8192):
+                total += len(chunk)
+                if total > config.MAX_DOWNLOAD_SIZE:
+                    raise DownloadTooLargeError(f"Download exceeded limit {config.MAX_DOWNLOAD_SIZE} during streaming")
                 buf.write(chunk)
             buf.seek(0)
             buf.name = b_filename
 
         return buf, b_filename
 
+    except DownloadTooLargeError:
+        logger.warning(
+            "Download too large",
+            extra={"book_id": book.id, "format": b_format, "url": book_url},
+        )
+        return None, None
     except requests.exceptions.Timeout:
         logger.warning(
             "Download timeout",
@@ -591,17 +675,6 @@ def cleanup_old_files(days: int = 30):
         full_path = os.path.join(config.BOOKS_DIR, book_dir)
         try:
             if os.path.isdir(full_path) and os.path.getmtime(full_path) < cutoff:
-                for root, _, files in os.walk(full_path, topdown=False):
-                    for name in files:
-                        try:
-                            os.remove(os.path.join(root, name))
-                        except OSError:
-                            logger.debug(
-                                "Failed to remove file", extra={"path": os.path.join(root, name)}, exc_info=True
-                            )
-                    try:
-                        os.rmdir(root)
-                    except OSError:
-                        logger.debug("Failed to remove directory", extra={"path": root}, exc_info=True)
+                shutil.rmtree(full_path, ignore_errors=True)
         except OSError:
             continue

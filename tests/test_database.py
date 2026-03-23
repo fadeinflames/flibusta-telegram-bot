@@ -200,8 +200,9 @@ class TestBookCache:
         cached = db.get_cached_book("42")
         assert cached is not None
         assert cached["title"] == "Test Book"
-        assert cached["formats"] == {"(fb2)": "http://example.com/b/42/fb2"}
-        assert cached["genres"] == ["fiction"]
+        # DB stores formats/genres as JSON strings; Book.from_dict parses them
+        assert '"(fb2)"' in cached["formats"]
+        assert '"fiction"' in cached["genres"]
 
     def test_cache_miss(self, tmp_db):
         assert db.get_cached_book("999") is None

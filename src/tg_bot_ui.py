@@ -17,7 +17,7 @@ def breadcrumbs(*parts: str) -> str:
 def screen(title: str, body: str, trail: str | None = None) -> str:
     lines = [f"{title}"]
     if trail:
-        lines.append(f"_{trail}_")
+        lines.append(f"<i>{trail}</i>")
     lines.append("")
     lines.append(DIVIDER)
     lines.append(body.strip())

@@ -1,16 +1,22 @@
 import unittest
 
 from src import config
-from src.tg_bot_presentation import escape_md, get_user_level, next_level_info, shelf_label
+from src.tg_bot_presentation import escape_html, escape_md, get_user_level, next_level_info, shelf_label
 
 
 class TestTgBotPresentation(unittest.TestCase):
-    def test_escape_md_escapes_markdown_v1_chars(self):
-        self.assertEqual(escape_md("_*`[]"), "\\_\\*\\`\\[\\]")
+    def test_escape_html_escapes_special_chars(self):
+        self.assertEqual(escape_html("<b>bold&</b>"), "&lt;b&gt;bold&amp;&lt;/b&gt;")
 
-    def test_escape_md_handles_empty(self):
-        self.assertEqual(escape_md(""), "")
-        self.assertEqual(escape_md(None), "")
+    def test_escape_html_handles_empty(self):
+        self.assertEqual(escape_html(""), "")
+        self.assertEqual(escape_html(None), "")
+
+    def test_escape_md_is_alias_for_escape_html(self):
+        self.assertIs(escape_md, escape_html)
+
+    def test_escape_html_passes_through_safe_text(self):
+        self.assertEqual(escape_html("hello world"), "hello world")
 
     def test_get_user_level_returns_last_reached_level(self):
         top = config.ACHIEVEMENT_LEVELS[-1]

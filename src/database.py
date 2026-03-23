@@ -1,23 +1,48 @@
 import json
 import os
 import sqlite3
+import threading
 from contextlib import contextmanager
 
 from src import config
 
 DB_PATH = config.DB_PATH
 
+# ────────────────────── Per-thread persistent connection ──────────────────────
 
-@contextmanager
-def get_db():
-    """Контекстный менеджер для работы с БД."""
+_thread_local = threading.local()
+
+
+def _get_conn() -> sqlite3.Connection:
+    """Return a per-thread persistent connection (created once, reused)."""
+    conn = getattr(_thread_local, "conn", None)
+    if conn is not None:
+        return conn
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys=ON")
+    conn.execute("PRAGMA journal_mode=WAL")
+    _thread_local.conn = conn
+    return conn
+
+
+@contextmanager
+def get_db():
+    """Контекстный менеджер — reuses per-thread connection."""
+    conn = _get_conn()
     try:
         yield conn
-    finally:
+    except Exception:
+        conn.rollback()
+        raise
+
+
+def close_connections():
+    """Close per-thread connection (for cleanup / testing)."""
+    conn = getattr(_thread_local, "conn", None)
+    if conn is not None:
         conn.close()
+        _thread_local.conn = None
 
 
 def init_database():
@@ -25,7 +50,6 @@ def init_database():
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
 
     with get_db() as conn:
-        conn.execute("PRAGMA journal_mode=WAL")
         cursor = conn.cursor()
 
         cursor.execute("""
@@ -468,11 +492,10 @@ def get_user_downloads(user_id: str, limit: int = 10) -> list[dict]:
 
 
 def cache_book(book):
-    """Закэшировать информацию о книге."""
+    """Закэшировать информацию о книге (используя Book.to_dict)."""
     with get_db() as conn:
         cursor = conn.cursor()
-        formats_json = json.dumps(book.formats)
-        genres_json = json.dumps(getattr(book, "genres", []))
+        d = book.to_dict()
 
         cursor.execute(
             """
@@ -482,19 +505,19 @@ def cache_book(book):
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
             (
-                book.id,
-                book.title,
-                book.author,
-                book.link,
-                formats_json,
-                book.cover,
-                book.size,
-                getattr(book, "series", ""),
-                getattr(book, "year", ""),
-                getattr(book, "annotation", ""),
-                genres_json,
-                getattr(book, "rating", ""),
-                getattr(book, "author_link", ""),
+                d["book_id"],
+                d["title"],
+                d["author"],
+                d["link"],
+                d["formats"],
+                d["cover"],
+                d["size"],
+                d["series"],
+                d["year"],
+                d["annotation"],
+                d["genres"],
+                d["rating"],
+                d["author_link"],
             ),
         )
         conn.commit()
@@ -516,13 +539,7 @@ def get_cached_book(book_id: str) -> dict | None:
                 (book_id,),
             )
             conn.commit()
-            book_dict = dict(row)
-            book_dict["formats"] = json.loads(book_dict["formats"])
-            try:
-                book_dict["genres"] = json.loads(book_dict.get("genres", "[]") or "[]")
-            except (json.JSONDecodeError, TypeError):
-                book_dict["genres"] = []
-            return book_dict
+            return dict(row)
         return None
 
 
@@ -592,20 +609,46 @@ def get_global_stats() -> dict:
 
 
 def get_user_stats(user_id: str) -> dict:
-    """Получить статистику пользователя."""
+    """Получить статистику пользователя (все запросы в одном соединении)."""
     with get_db() as conn:
         cursor = conn.cursor()
 
-        user = get_user(user_id)
-        if not user:
+        # User info
+        cursor.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
+        user_row = cursor.fetchone()
+        if not user_row:
             return {}
+        user = dict(user_row)
 
+        # Favorites count
         cursor.execute("SELECT COUNT(*) as favorites_count FROM favorites WHERE user_id = ?", (user_id,))
         favorites_count = cursor.fetchone()["favorites_count"]
 
-        recent_searches = get_user_search_history(user_id, limit=5)
-        recent_downloads = get_user_downloads(user_id, limit=5)
+        # Recent searches
+        cursor.execute(
+            """
+            SELECT * FROM search_history
+            WHERE user_id = ?
+            ORDER BY timestamp DESC, id DESC
+            LIMIT 5
+        """,
+            (user_id,),
+        )
+        recent_searches = [dict(row) for row in cursor.fetchall()]
 
+        # Recent downloads
+        cursor.execute(
+            """
+            SELECT * FROM downloads
+            WHERE user_id = ?
+            ORDER BY download_date DESC
+            LIMIT 5
+        """,
+            (user_id,),
+        )
+        recent_downloads = [dict(row) for row in cursor.fetchall()]
+
+        # Favorite authors
         cursor.execute(
             """
             SELECT author, COUNT(*) as count

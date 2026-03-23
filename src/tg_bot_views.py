@@ -1,4 +1,4 @@
-"""Display / screen-rendering functions."""
+"""Display / screen-rendering functions (HTML mode)."""
 
 import math
 import os
@@ -15,11 +15,10 @@ from src.tg_bot_helpers import (
     db_call,
     flib_call,
     safe_edit_or_send,
-    send_or_edit_message,
 )
 from src.tg_bot_nav import reset_nav as _reset_nav
 from src.tg_bot_presentation import (
-    escape_md,
+    escape_html,
     get_user_level,
     next_level_info,
 )
@@ -59,7 +58,7 @@ async def show_books_page(books, update: Update, context: CallbackContext, mes, 
     search_type = context.user_data.get("search_type", "поиску")
     search_query = context.user_data.get("search_query", "")
 
-    query_text = f"«{escape_md(search_query)}»" if search_query else "—"
+    query_text = f"«{escape_html(search_query)}»" if search_query else "—"
     page_info = f"  •  стр. {page}/{total_pages}" if total_pages > 1 else ""
     header_text = f"🔍 Результаты по {search_type}: {query_text}\nНайдено: {total_books}{page_info}\n"
 
@@ -67,11 +66,14 @@ async def show_books_page(books, update: Update, context: CallbackContext, mes, 
     book_ids = [book.id for book in page_books]
     fav_set = await db_call(db.are_favorites, user_id, book_ids)
 
+    # Default format for quick-download button label
+    default_fmt = await db_call(db.get_user_preference, user_id, "default_format", "fb2")
+
     body_lines = []
     for i, book in enumerate(page_books, start=start_idx + 1):
         star = " ⭐" if book.id in fav_set else ""
-        title = truncate(escape_md(book.title), 60)
-        author = escape_md(book.author) if book.author else "—"
+        title = truncate(escape_html(book.title), 60)
+        author = escape_html(book.author) if book.author else "—"
 
         meta_parts = []
         if book.year:
@@ -81,7 +83,7 @@ async def show_books_page(books, update: Update, context: CallbackContext, mes, 
             meta_parts.append(fmts)
         meta_str = f"  ({', '.join(meta_parts)})" if meta_parts else ""
 
-        body_lines.append(f"*{i}.* {title}{star}")
+        body_lines.append(f"<b>{i}.</b> {title}{star}")
         body_lines.append(f"     ✍️ {author}{meta_str}")
 
     text = header_text + DIVIDER + "\n" + "\n".join(body_lines)
@@ -98,13 +100,13 @@ async def show_books_page(books, update: Update, context: CallbackContext, mes, 
             ]
         )
 
-    # Compact action buttons: rows of [number + title] [⬇️]
+    # Compact action buttons: rows of [number + title] [⬇️ format]
     for i, book in enumerate(page_books, start=start_idx + 1):
         btn_title = truncate(book.title, 30)
         kb.append(
             [
                 InlineKeyboardButton(f"{i}. {btn_title}", callback_data=f"book_{book.id}"),
-                InlineKeyboardButton("📥", callback_data=f"qd_{book.id}"),
+                InlineKeyboardButton(f"📥 {default_fmt}", callback_data=f"qd_{book.id}"),
             ]
         )
 
@@ -126,6 +128,8 @@ async def show_books_page(books, update: Update, context: CallbackContext, mes, 
         if page < total_pages - 2:
             quick_nav.append(InlineKeyboardButton(f"{total_pages} ⏭", callback_data=f"page_{total_pages}"))
         if quick_nav:
+            # Add page-jump button
+            quick_nav.append(InlineKeyboardButton("📄 Стр.", callback_data="page_jump"))
             kb.append(quick_nav)
 
     kb.append([InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu")])
@@ -136,7 +140,7 @@ async def show_books_page(books, update: Update, context: CallbackContext, mes, 
         await context.bot.delete_message(chat_id=mes.chat_id, message_id=mes.message_id)
         await update.message.reply_text(
             text,
-            parse_mode=ParseMode.MARKDOWN,
+            parse_mode=ParseMode.HTML,
             reply_markup=reply_markup,
         )
     else:
@@ -144,7 +148,7 @@ async def show_books_page(books, update: Update, context: CallbackContext, mes, 
         try:
             await query.edit_message_text(
                 text,
-                parse_mode=ParseMode.MARKDOWN,
+                parse_mode=ParseMode.HTML,
                 reply_markup=reply_markup,
             )
         except (BadRequest, Forbidden):
@@ -155,7 +159,7 @@ async def show_books_page(books, update: Update, context: CallbackContext, mes, 
             await context.bot.send_message(
                 chat_id=update.effective_chat.id,
                 text=text,
-                parse_mode=ParseMode.MARKDOWN,
+                parse_mode=ParseMode.HTML,
                 reply_markup=reply_markup,
             )
 
@@ -185,19 +189,19 @@ async def show_book_details_with_favorite(book_id: str, update: Update, context:
         detail_bits.append(f"📁 {len(book.formats)} форматов")
 
     compact_info = "  •  ".join(detail_bits)
-    capt = f"📖 *{escape_md(book.title)}*\n✍️ _{escape_md(book.author)}_\n"
+    capt = f"📖 <b>{escape_html(book.title)}</b>\n✍️ <i>{escape_html(book.author)}</i>\n"
     if compact_info:
         capt += f"{compact_info}\n"
-    capt += f"\n🔗 [Страница на сайте]({book.link})"
+    capt += f'\n🔗 <a href="{book.link}">Страница на сайте</a>'
 
     annotation_short = ""
     has_full_annotation = False
     if book.annotation:
         if len(book.annotation) > 250:
-            annotation_short = escape_md(book.annotation[:247]) + "…"
+            annotation_short = escape_html(book.annotation[:247]) + "…"
             has_full_annotation = True
         else:
-            annotation_short = escape_md(book.annotation)
+            annotation_short = escape_html(book.annotation)
 
     # ── Buttons ──
     kb = []
@@ -255,7 +259,7 @@ async def show_book_details_with_favorite(book_id: str, update: Update, context:
         kb.append(
             [
                 InlineKeyboardButton(
-                    f"👤 Другие книги: {truncate(escape_md(book.author), 25)}",
+                    f"👤 Другие книги: {truncate(book.author, 25)}",
                     callback_data=f"author_books_{book_id}",
                 )
             ]
@@ -271,7 +275,14 @@ async def show_book_details_with_favorite(book_id: str, update: Update, context:
 
     full_text = capt
     if annotation_short:
-        full_text += f"\n\n📝 _{annotation_short}_"
+        full_text += f"\n\n📝 <i>{annotation_short}</i>"
+
+    # Always delete previous message first, then send new (avoids photo→text flicker)
+    if update.callback_query:
+        try:
+            await update.callback_query.delete_message()
+        except (BadRequest, Forbidden):
+            pass
 
     if book.cover:
         try:
@@ -282,7 +293,7 @@ async def show_book_details_with_favorite(book_id: str, update: Update, context:
 
             photo_caption = capt
             if annotation_short and len(photo_caption) + len(annotation_short) + 10 < 1024:
-                photo_caption += f"\n\n📝 _{annotation_short}_"
+                photo_caption += f"\n\n📝 <i>{annotation_short}</i>"
 
             if len(photo_caption) > 1024:
                 photo_caption = photo_caption[:1020] + "…"
@@ -293,17 +304,22 @@ async def show_book_details_with_favorite(book_id: str, update: Update, context:
                     photo=cover,
                     caption=photo_caption,
                     reply_markup=reply_markup,
-                    parse_mode=ParseMode.MARKDOWN,
+                    parse_mode=ParseMode.HTML,
                 )
-                if update.callback_query:
-                    try:
-                        await update.callback_query.delete_message()
-                    except (BadRequest, Forbidden):
-                        pass
         except (OSError, BadRequest, Forbidden):
-            await send_or_edit_message(update, context, full_text, reply_markup)
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text=full_text,
+                reply_markup=reply_markup,
+                parse_mode=ParseMode.HTML,
+            )
     else:
-        await send_or_edit_message(update, context, full_text, reply_markup)
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text=full_text,
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.HTML,
+        )
 
 
 async def show_book_meta(book_id: str, update: Update, context: CallbackContext):
@@ -314,23 +330,23 @@ async def show_book_meta(book_id: str, update: Update, context: CallbackContext)
         return
 
     lines = [
-        f"📖 *{escape_md(book.title)}*",
-        f"✍️ _{escape_md(book.author)}_",
+        f"📖 <b>{escape_html(book.title)}</b>",
+        f"✍️ <i>{escape_html(book.author)}</i>",
     ]
     if book.genres:
-        lines.append(f"📂 Жанры: {escape_md(', '.join(book.genres[:8]))}")
+        lines.append(f"📂 Жанры: {escape_html(', '.join(book.genres[:8]))}")
     if book.series:
-        lines.append(f"📚 Серия: {escape_md(book.series)}")
+        lines.append(f"📚 Серия: {escape_html(book.series)}")
     if book.year:
         lines.append(f"📅 Год: {book.year}")
     if book.size:
         lines.append(f"📊 Размер: {book.size}")
     if book.rating:
         lines.append(f"⭐ Рейтинг: {book.rating}")
-    lines.append(f"🔗 [Страница на сайте]({book.link})")
+    lines.append(f'🔗 <a href="{book.link}">Страница на сайте</a>')
 
     text = screen(
-        "ℹ️ *Подробности книги*",
+        "ℹ️ <b>Подробности книги</b>",
         "\n".join(lines),
         breadcrumbs("🏠 Меню", "📖 Книга", "ℹ️ Подробности"),
     )
@@ -382,34 +398,43 @@ async def show_main_menu_command(update: Update, context: CallbackContext, *, is
     user_id = str(update.effective_user.id)
     sc, dc, fc, level, last = await _build_main_menu_data(user_id, user_name)
 
-    greeting = (
-        f"👋 *Привет, {escape_md(user_name)}!*\n\n📚 *Добро пожаловать в библиотеку Flibusta!*"
-        if is_start
-        else "📋 *Справка по командам бота*"
-    )
+    if is_start:
+        # Short greeting for /start
+        help_text = (
+            f"👋 <b>Привет, {escape_html(user_name)}!</b>\n\n"
+            f"📚 <b>Добро пожаловать в библиотеку Flibusta!</b>\n\n"
+            f"{DIVIDER}\n"
+            f"<b>📊 ВАША СТАТИСТИКА</b>  {level}\n"
+            f"{DIVIDER}\n"
+            f"📖 Поисков: {sc}\n"
+            f"📥 Скачиваний: {dc}\n"
+            f"⭐ В избранном: {fc}\n\n"
+            f"<i>Выберите действие кнопками ниже или отправьте название книги текстом!</i>"
+        )
+    else:
+        # Full /help with command reference
+        help_text = f"""📋 <b>Справка по командам бота</b>
 
-    help_text = f"""{greeting}
-
-━━━━━━━━━━━━━━━━━━━━━
-*📊 ВАША СТАТИСТИКА*  {level}
-━━━━━━━━━━━━━━━━━━━━━
+{DIVIDER}
+<b>📊 ВАША СТАТИСТИКА</b>  {level}
+{DIVIDER}
 📖 Поисков: {sc}
 📥 Скачиваний: {dc}
 ⭐ В избранном: {fc}
 
-━━━━━━━━━━━━━━━━━━━━━
-*🔍 КОМАНДЫ ПОИСКА*
-━━━━━━━━━━━━━━━━━━━━━
+{DIVIDER}
+<b>🔍 КОМАНДЫ ПОИСКА</b>
+{DIVIDER}
 
-📖 /title `название` - поиск по названию
-👤 /author `фамилия` - поиск по автору
-🎯 /exact `название | автор` - точный поиск
-🆔 /id `номер` - получить книгу по ID
+📖 /title <code>название</code> - поиск по названию
+👤 /author <code>фамилия</code> - поиск по автору
+🎯 /exact <code>название | автор</code> - точный поиск
+🆔 /id <code>номер</code> - получить книгу по ID
 🔍 /search - универсальный поиск
 
-━━━━━━━━━━━━━━━━━━━━━
-*⭐ ЛИЧНЫЙ КАБИНЕТ*
-━━━━━━━━━━━━━━━━━━━━━
+{DIVIDER}
+<b>⭐ ЛИЧНЫЙ КАБИНЕТ</b>
+{DIVIDER}
 
 ⭐ /favorites - мои избранные книги
 📜 /history - история поиска
@@ -417,11 +442,10 @@ async def show_main_menu_command(update: Update, context: CallbackContext, *, is
 ⚙️ /settings - настройки
 📊 /mystats - моя статистика
 
-_Выберите команду для начала работы!_
-    """
+<i>Выберите команду для начала работы!</i>"""
 
     reply_markup = InlineKeyboardMarkup(_main_menu_keyboard(last))
-    await update.message.reply_text(help_text, parse_mode=ParseMode.MARKDOWN, reply_markup=reply_markup)
+    await update.message.reply_text(help_text, parse_mode=ParseMode.HTML, reply_markup=reply_markup)
 
 
 async def show_main_menu(update: Update, context: CallbackContext):
@@ -433,9 +457,9 @@ async def show_main_menu(update: Update, context: CallbackContext):
     sc, dc, fc, level, last = await _build_main_menu_data(user_id, user_name)
 
     text = screen(
-        "🏠 *Главное меню*",
+        "🏠 <b>Главное меню</b>",
         (
-            f"Привет, {escape_md(user_name)}!  {level}\n\n"
+            f"Привет, {escape_html(user_name)}!  {level}\n\n"
             f"📊 Статистика:\n"
             f"• Поисков: {sc}\n"
             f"• Скачиваний: {dc}\n"
@@ -450,20 +474,15 @@ async def show_main_menu(update: Update, context: CallbackContext):
 
 
 async def show_search_menu(update: Update, context: CallbackContext):
-    """Search-method chooser screen."""
+    """Search-method chooser screen with interactive buttons."""
     text = screen(
-        "🔍 *Меню поиска*",
+        "🔍 <b>Меню поиска</b>",
         (
             "Выберите способ поиска:\n\n"
-            "📖 По названию — найти книги по названию\n"
-            "👤 По автору — все книги автора\n"
-            "🎯 Точный поиск — название + автор\n"
-            "🆔 По ID — если знаете номер книги\n\n"
-            "Используйте команды:\n"
-            "• `/title название`\n"
-            "• `/author фамилия`\n"
-            "• `/exact название | автор`\n"
-            "• `/id номер`\n\n"
+            "📖 <b>По названию</b> — найти книги по названию\n"
+            "👤 <b>По автору</b> — все книги автора\n"
+            "🎯 <b>Точный поиск</b> — название + автор\n"
+            "🆔 <b>По ID</b> — если знаете номер книги\n\n"
             "💡 Или просто отправьте название книги текстом!"
         ),
         breadcrumbs("🏠 Меню", "🔍 Поиск"),
@@ -471,9 +490,17 @@ async def show_search_menu(update: Update, context: CallbackContext):
 
     keyboard = [
         [
+            InlineKeyboardButton("📖 По названию", callback_data="await_title_search"),
+            InlineKeyboardButton("👤 По автору", callback_data="await_author_search"),
+        ],
+        [
+            InlineKeyboardButton("🎯 Точный поиск", callback_data="await_exact_search"),
+            InlineKeyboardButton("🆔 По ID", callback_data="await_id_search"),
+        ],
+        [
             InlineKeyboardButton("◀️ Назад", callback_data="nav_back"),
             InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu"),
-        ]
+        ],
     ]
     await safe_edit_or_send(update.callback_query, context, text, InlineKeyboardMarkup(keyboard))
 
@@ -490,19 +517,19 @@ async def show_user_history(update: Update, context: CallbackContext, *, from_co
 
     if not history:
         text = screen(
-            "📜 *История поиска*",
+            "📜 <b>История поиска</b>",
             "История пуста\n\nНачните поиск с команд:\n• /title\n• /author\n• /exact",
             breadcrumbs("🏠 Меню", "📜 История"),
         )
     else:
-        text = screen("📜 *История поиска (последние 15)*", "", breadcrumbs("🏠 Меню", "📜 История")) + "\n\n"
+        text = screen("📜 <b>История поиска (последние 15)</b>", "", breadcrumbs("🏠 Меню", "📜 История")) + "\n\n"
         for item in history:
             timestamp = item["timestamp"][:16]
             command = item["command"]
             q = truncate(item["query"], 30)
             results = item["results_count"]
             text += f"🕐 {timestamp}\n"
-            text += f"   `/{command}`: «{escape_md(q)}» ({results} рез.)\n\n"
+            text += f"   <code>/{command}</code>: «{escape_html(q)}» ({results} рез.)\n\n"
 
     keyboard = [
         [
@@ -513,7 +540,7 @@ async def show_user_history(update: Update, context: CallbackContext, *, from_co
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     if from_command:
-        await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN, reply_markup=reply_markup)
+        await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=reply_markup)
     else:
         await safe_edit_or_send(update.callback_query, context, text, reply_markup)
 
@@ -524,17 +551,19 @@ async def show_user_downloads(update: Update, context: CallbackContext, *, from_
     downloads = await db_call(db.get_user_downloads, user_id, limit=15)
 
     if not downloads:
-        text = screen("📥 *История скачиваний*", "Пока пусто", breadcrumbs("🏠 Меню", "📥 Скачивания"))
+        text = screen("📥 <b>История скачиваний</b>", "Пока пусто", breadcrumbs("🏠 Меню", "📥 Скачивания"))
     else:
-        text = screen("📥 *История скачиваний (последние 15)*", "", breadcrumbs("🏠 Меню", "📥 Скачивания")) + "\n\n"
+        text = (
+            screen("📥 <b>История скачиваний (последние 15)</b>", "", breadcrumbs("🏠 Меню", "📥 Скачивания")) + "\n\n"
+        )
         for item in downloads:
             timestamp = item["download_date"][:16]
             title = truncate(item["title"], 30)
             author = truncate(item["author"], 20)
             format_type = item["format"]
             text += f"🕐 {timestamp}\n"
-            text += f"   📖 {escape_md(title)}\n"
-            text += f"   ✍️ {escape_md(author)}\n"
+            text += f"   📖 {escape_html(title)}\n"
+            text += f"   ✍️ {escape_html(author)}\n"
             text += f"   📁 Формат: {format_type}\n\n"
 
     keyboard = [
@@ -546,7 +575,7 @@ async def show_user_downloads(update: Update, context: CallbackContext, *, from_
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     if from_command:
-        await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN, reply_markup=reply_markup)
+        await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=reply_markup)
     else:
         await safe_edit_or_send(update.callback_query, context, text, reply_markup)
 
@@ -566,35 +595,35 @@ async def show_user_statistics(update: Update, context: CallbackContext, *, from
     nxt = next_level_info(search_count, download_count)
 
     text = screen(
-        "📊 *Ваша статистика*",
+        "📊 <b>Ваша статистика</b>",
         (
-            f"🏆 Уровень: *{level}*\n"
-            f"_{nxt}_\n\n"
-            f"👤 ID: `{user_id}`\n"
+            f"🏆 Уровень: <b>{level}</b>\n"
+            f"<i>{nxt}</i>\n\n"
+            f"👤 ID: <code>{user_id}</code>\n"
             f"📅 Регистрация: {user_info.get('first_seen', 'Неизвестно')[:10]}\n"
             f"📅 Активность: {user_info.get('last_seen', 'Неизвестно')[:16]}\n\n"
-            f"📈 *Активность:*\n"
+            f"📈 <b>Активность:</b>\n"
             f"• Поисков: {search_count}\n"
             f"• Скачиваний: {download_count}\n"
             f"• В избранном: {favorites_count}\n\n"
-            "👤 *Любимые авторы:*\n"
+            "👤 <b>Любимые авторы:</b>\n"
         ),
         breadcrumbs("🏠 Меню", "📊 Статистика"),
     )
 
     if favorite_authors:
         for i, author in enumerate(favorite_authors[:5], 1):
-            text += f"{i}. {escape_md(author['author'])} ({author['count']} книг)\n"
+            text += f"{i}. {escape_html(author['author'])} ({author['count']} книг)\n"
     else:
         text += "Пока нет данных\n"
 
     if recent_downloads:
-        text += "\n📚 *Последние скачивания:*\n"
+        text += "\n📚 <b>Последние скачивания:</b>\n"
         for dl in recent_downloads[:3]:
             title = truncate(dl["title"], 25)
-            text += f"• {escape_md(title)}\n"
+            text += f"• {escape_html(title)}\n"
 
-    text += "\n🏆 *Уровни:*\n"
+    text += "\n🏆 <b>Уровни:</b>\n"
     for lvl in config.ACHIEVEMENT_LEVELS:
         marker = "▸" if lvl["name"] == level else "▹"
         text += f"{marker} {lvl['name']} — {lvl['searches']}+ поисков, {lvl['downloads']}+ скачиваний\n"
@@ -608,39 +637,42 @@ async def show_user_statistics(update: Update, context: CallbackContext, *, from
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     if from_command:
-        await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN, reply_markup=reply_markup)
+        await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=reply_markup)
     else:
         await safe_edit_or_send(update.callback_query, context, text, reply_markup)
 
 
 async def show_user_settings(update: Update, context: CallbackContext, *, from_command: bool = False):
-    """User settings screen."""
+    """User settings screen with highlighted active values."""
     user_id = str(update.effective_user.id)
     books_per_page = await db_call(db.get_user_preference, user_id, "books_per_page", config.BOOKS_PER_PAGE_DEFAULT)
     default_format = await db_call(db.get_user_preference, user_id, "default_format", "fb2")
 
     text = screen(
-        "⚙️ *Настройки*",
+        "⚙️ <b>Настройки</b>",
         (
-            f"📄 Книг на странице: `{books_per_page}`\n"
-            f"📁 Формат по умолчанию: `{default_format}`\n\n"
-            "_Настройки сохраняются автоматически_"
+            f"📄 Книг на странице: <code>{books_per_page}</code>\n"
+            f"📁 Формат по умолчанию: <code>{default_format}</code>\n\n"
+            "<i>Настройки сохраняются автоматически</i>"
         ),
         breadcrumbs("🏠 Меню", "⚙️ Настройки"),
     )
 
+    # Highlight active page count
+    page_buttons = []
+    for count in [5, 10, 20]:
+        label = f"✅ {count}" if books_per_page == count else f"📄 {count}"
+        page_buttons.append(InlineKeyboardButton(label, callback_data=f"set_per_page_{count}"))
+
+    # Highlight active format
+    fmt_buttons = []
+    for fmt in config.ALL_FORMATS:
+        label = f"✅ {fmt.upper()}" if default_format == fmt else fmt.upper()
+        fmt_buttons.append(InlineKeyboardButton(label, callback_data=f"set_format_{fmt}"))
+
     keyboard = [
-        [
-            InlineKeyboardButton("📄 5", callback_data="set_per_page_5"),
-            InlineKeyboardButton("📄 10", callback_data="set_per_page_10"),
-            InlineKeyboardButton("📄 20", callback_data="set_per_page_20"),
-        ],
-        [
-            InlineKeyboardButton("FB2", callback_data="set_format_fb2"),
-            InlineKeyboardButton("EPUB", callback_data="set_format_epub"),
-            InlineKeyboardButton("MOBI", callback_data="set_format_mobi"),
-            InlineKeyboardButton("PDF", callback_data="set_format_pdf"),
-        ],
+        page_buttons,
+        fmt_buttons,
         [
             InlineKeyboardButton("◀️ Назад", callback_data="nav_back"),
             InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu"),
@@ -649,6 +681,6 @@ async def show_user_settings(update: Update, context: CallbackContext, *, from_c
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     if from_command:
-        await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN, reply_markup=reply_markup)
+        await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=reply_markup)
     else:
         await safe_edit_or_send(update.callback_query, context, text, reply_markup)
