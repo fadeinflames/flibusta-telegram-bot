@@ -89,6 +89,7 @@ class RTopic:
     title: str
     size: str
     seeds: int
+    leeches: int = 0
     forum_name: str = ""
     registered: str = ""
 
@@ -173,12 +174,24 @@ def search(query: str, limit: int = 10) -> list[RTopic]:
         size_td = row.select_one("td.tor-size")
         size = size_td.get_text(strip=True).split()[0] if size_td else "?"
 
-        # Seeds: look for seedmed span/td
+        # Seeds / leechers (columns on tracker; «пиры» в разговорной речи часто = личи + сиды)
         seeds_span = row.select_one("b.seedmed, span.seedmed")
         try:
             seeds = int(seeds_span.get_text(strip=True)) if seeds_span else 0
         except ValueError:
             seeds = 0
+
+        leech_span = row.select_one("b.leechmed, span.leechmed, b.leechMed, span.leechMed")
+        if not leech_span:
+            for td in row.select("td"):
+                cls = " ".join(td.get("class") or [])
+                if "leech" in cls.lower():
+                    leech_span = td.select_one("b, span")
+                    break
+        try:
+            leeches = int(leech_span.get_text(strip=True)) if leech_span else 0
+        except ValueError:
+            leeches = 0
 
         # Keep only releases where torrent actually contains audio files.
         try:
@@ -187,10 +200,14 @@ def search(query: str, limit: int = 10) -> list[RTopic]:
         except Exception:
             continue
 
-        results.append(RTopic(topic_id=topic_id, title=title, size=size, seeds=seeds))
+        results.append(
+            RTopic(topic_id=topic_id, title=title, size=size, seeds=seeds, leeches=leeches)
+        )
         if len(results) >= limit:
             break
 
+    # Сверху — раздачи с большим числом пиров в поиске (сиды + личи)
+    results.sort(key=lambda t: (t.seeds + t.leeches, t.seeds), reverse=True)
     return results
 
 

@@ -49,12 +49,13 @@ def _results_text(results: list[rutracker.RTopic], query: str, page: int) -> str
     start = (page - 1) * _PAGE_SIZE
     chunk = results[start : start + _PAGE_SIZE]
 
-    lines = [f"<b>🎧 RuTracker</b> — «{query}» ({total} результ.)\n"]
+    lines = [f"<b>🎧 RuTracker</b> — «{query}» ({total} результ., по убыв. пиров)\n"]
     for i, t in enumerate(chunk, start + 1):
-        seeds_icon = "🟢" if t.seeds >= 10 else ("🟡" if t.seeds >= 3 else "🔴")
+        swarm = t.seeds + t.leeches
+        seeds_icon = "🟢" if swarm >= 10 else ("🟡" if swarm >= 3 else "🔴")
         lines.append(
             f"{i}. {t.title[:80]}\n"
-            f"   {seeds_icon} {t.seeds} сид • {_fmt_size(t.size)}"
+            f"   {seeds_icon} {t.seeds} сид • {t.leeches} лич • {_fmt_size(t.size)}"
         )
     if pages > 1:
         lines.append(f"\nСтраница {page}/{pages}")
@@ -220,6 +221,14 @@ async def handle_rt_pick(
         selected.filename,
         selected.size_bytes,
     )
+    rt_topic = next(
+        (
+            t
+            for t in context.user_data.get(_RT_RESULTS_KEY, {}).get("results", [])
+            if t.topic_id == topic_id
+        ),
+        None,
+    )
     task_id = downloader.enqueue(
         user_id=update.effective_user.id,
         chat_id=update.effective_chat.id,
@@ -228,8 +237,9 @@ async def handle_rt_pick(
         file_index=file_index,
         filename=selected.filename,
         file_size=selected.size_bytes,
-        seeders=next((t.seeds for t in context.user_data.get(_RT_RESULTS_KEY, {}).get("results", []) if t.topic_id == topic_id), 0),
-        topic_size=next((t.size for t in context.user_data.get(_RT_RESULTS_KEY, {}).get("results", []) if t.topic_id == topic_id), ""),
+        seeders=rt_topic.seeds if rt_topic else 0,
+        leeches=rt_topic.leeches if rt_topic else 0,
+        topic_size=rt_topic.size if rt_topic else "",
     )
     await query.edit_message_text(
         f"⏳ <b>Добавлено в очередь</b>\n\n"

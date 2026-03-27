@@ -42,6 +42,7 @@ class DownloadTask:
     filename: str = ""
     file_size: int = 0
     seeders: int = 0
+    leeches: int = 0
     topic_size: str = ""
     created_at: float = field(default_factory=time.time)
 
@@ -85,6 +86,7 @@ class RutrackerDownloader:
         filename: str = "",
         file_size: int = 0,
         seeders: int = 0,
+        leeches: int = 0,
         topic_size: str = "",
     ) -> int:
         """Add a download to the queue.  Returns the task DB id."""
@@ -107,6 +109,7 @@ class RutrackerDownloader:
             filename=filename,
             file_size=file_size,
             seeders=seeders,
+            leeches=leeches,
             topic_size=topic_size,
         )
         self._queue.put_nowait(task)
@@ -234,7 +237,7 @@ class RutrackerDownloader:
             task.chat_id,
             "🚀 <b>Задача запущена</b>\n"
             f"ID: #{task.task_id}\n"
-            f"Сиды: {task.seeders}\n"
+            f"Сиды / личи (из поиска): {task.seeders} / {task.leeches}\n"
             f"Размер релиза: {task.topic_size or '?'}\n"
             f"Файл: <code>{html.escape(task.filename or 'не указан')}</code>\n"
             "Статус: подготовка…",
@@ -470,7 +473,7 @@ class RutrackerDownloader:
             text = (
                 f"{phase}\n"
                 f"ID: #{task.task_id}\n"
-                f"Сиды (из поиска): {task.seeders}\n"
+                f"Сиды / личи (из поиска): {task.seeders} / {task.leeches}\n"
                 f"Файл: <code>{html.escape(task.filename or 'не указан')}</code>\n\n"
                 f"Скачано на диск: <b>{size_line}</b>{pct_line}\n"
                 f"Скорость: {speed_txt}\n"
