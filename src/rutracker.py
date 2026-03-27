@@ -25,6 +25,23 @@ _HEADERS = {
 # Singleton session — login once, reuse across requests
 _session: Optional[requests.Session] = None
 
+_SERIES_PATTERNS = [
+    r"\bserial\b",
+    r"\bсезон\b",
+    r"\bсерии\b",
+    r"\bs\d{1,2}e\d{1,2}\b",
+    r"\bseason\b",
+    r"\bepisodes?\b",
+]
+_BOOK_PATTERNS = [
+    r"\bаудиокниг",
+    r"\bкниг",
+    r"\bроман\b",
+    r"\bповест",
+    r"\bрассказ",
+    r"\bbook\b",
+]
+
 
 def _new_session() -> requests.Session:
     s = requests.Session()
@@ -95,6 +112,21 @@ class FileEntry:
 _AUDIO_EXTENSIONS = {".mp3", ".m4b", ".m4a", ".ogg", ".flac", ".opus", ".aac", ".wav"}
 
 
+def _looks_like_series(title: str) -> bool:
+    text = (title or "").lower()
+    return any(re.search(pat, text) for pat in _SERIES_PATTERNS)
+
+
+def _looks_like_book(title: str) -> bool:
+    text = (title or "").lower()
+    if any(re.search(pat, text) for pat in _BOOK_PATTERNS):
+        return True
+    # Typical audiobook title format: "Автор - Название"
+    if " - " in text:
+        return True
+    return False
+
+
 def search(query: str, limit: int = 10) -> list[RTopic]:
     """Search RuTracker audiobook categories.  Returns up to *limit* results."""
     s = get_session()
@@ -121,11 +153,15 @@ def search(query: str, limit: int = 10) -> list[RTopic]:
     rows = soup.select("tr.tCenter.hl-tr")
     results: list[RTopic] = []
 
-    for row in rows[:limit]:
+    for row in rows[:80]:
         link = row.select_one("a.tLink")
         if not link:
             continue
         title = link.get_text(strip=True)
+        if _looks_like_series(title):
+            continue
+        if not _looks_like_book(title):
+            continue
         href = link.get("href", "")
         m = re.search(r"t=(\d+)", href)
         if not m:
@@ -142,7 +178,16 @@ def search(query: str, limit: int = 10) -> list[RTopic]:
         except ValueError:
             seeds = 0
 
+        # Keep only releases where torrent actually contains audio files.
+        try:
+            if not get_topic_files(topic_id):
+                continue
+        except Exception:
+            continue
+
         results.append(RTopic(topic_id=topic_id, title=title, size=size, seeds=seeds))
+        if len(results) >= limit:
+            break
 
     return results
 
