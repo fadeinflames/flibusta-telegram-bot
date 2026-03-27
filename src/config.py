@@ -61,8 +61,9 @@ FFMPEG_TIMEOUT = 300  # seconds
 RUTRACKER_USERNAME = os.getenv("RUTRACKER_USERNAME", "")
 RUTRACKER_PASSWORD = os.getenv("RUTRACKER_PASSWORD", "")
 RUTRACKER_DOWNLOAD_DIR = os.getenv("RUTRACKER_DOWNLOAD_DIR", str(BASE_DIR / "downloads"))
-# Sub-forum IDs for audiobooks under category 33
-RUTRACKER_FORUMS = "2387,2388,2389,399,400,401,2346,2347,1803"
+# Search in category "Аудиокниги" (c=33):
+# https://rutracker.org/forum/index.php?c=33
+RUTRACKER_CATEGORY = os.getenv("RUTRACKER_CATEGORY", "33")
 
 # ──────────────────── Favorite shelves / tags ────────────────────
 FAVORITE_SHELVES = {

@@ -126,6 +126,8 @@ class RutrackerDownloader:
 
         # Save torrent file to temp
         dest_dir = Path(RUTRACKER_DOWNLOAD_DIR) / task.topic_id
+        # Ensure we don't mix files from previous attempts for this topic.
+        shutil.rmtree(dest_dir, ignore_errors=True)
         dest_dir.mkdir(parents=True, exist_ok=True)
 
         torrent_path = dest_dir / f"{task.topic_id}.torrent"
@@ -144,6 +146,14 @@ class RutrackerDownloader:
         audio_files = sorted(
             p for p in dest_dir.rglob("*") if p.suffix.lower() in AUDIO_EXTENSIONS
         )
+        if task.filename:
+            target_name = Path(task.filename).name.lower()
+            selected = [p for p in audio_files if p.name.lower() == target_name]
+            if selected:
+                audio_files = selected[:1]
+            elif audio_files:
+                # Fallback: if exact name is missing, send just one file, never a batch.
+                audio_files = audio_files[:1]
         if not audio_files:
             raise RuntimeError("No audio files found after download")
 

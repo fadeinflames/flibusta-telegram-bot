@@ -9,7 +9,7 @@ from typing import Optional
 import requests
 from bs4 import BeautifulSoup
 
-from src.config import RUTRACKER_FORUMS, RUTRACKER_PASSWORD, RUTRACKER_USERNAME
+from src.config import RUTRACKER_CATEGORY, RUTRACKER_PASSWORD, RUTRACKER_USERNAME
 
 logger = logging.getLogger(__name__)
 
@@ -101,7 +101,7 @@ def search(query: str, limit: int = 10) -> list[RTopic]:
     try:
         resp = s.post(
             f"{_BASE}/tracker.php",
-            data={"nm": query, "f": RUTRACKER_FORUMS},
+            data={"nm": query, "c": RUTRACKER_CATEGORY},
             timeout=15,
         )
         resp.raise_for_status()
@@ -112,7 +112,7 @@ def search(query: str, limit: int = 10) -> list[RTopic]:
         s = get_session()
         resp = s.post(
             f"{_BASE}/tracker.php",
-            data={"nm": query, "f": RUTRACKER_FORUMS},
+            data={"nm": query, "c": RUTRACKER_CATEGORY},
             timeout=15,
         )
         resp.raise_for_status()
