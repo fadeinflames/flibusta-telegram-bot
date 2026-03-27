@@ -210,6 +210,8 @@ async def handle_rt_pick(
         file_index=file_index,
         filename=selected.filename,
         file_size=selected.size_bytes,
+        seeders=next((t.seeds for t in context.user_data.get(_RT_RESULTS_KEY, {}).get("results", []) if t.topic_id == topic_id), 0),
+        topic_size=next((t.size for t in context.user_data.get(_RT_RESULTS_KEY, {}).get("results", []) if t.topic_id == topic_id), ""),
     )
     await query.edit_message_text(
         f"⏳ <b>Добавлено в очередь</b>\n\n"

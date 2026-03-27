@@ -40,6 +40,8 @@ class DownloadTask:
     file_index: int | None = None
     filename: str = ""
     file_size: int = 0
+    seeders: int = 0
+    topic_size: str = ""
     created_at: float = field(default_factory=time.time)
 
 
@@ -78,6 +80,8 @@ class RutrackerDownloader:
         file_index: int | None = None,
         filename: str = "",
         file_size: int = 0,
+        seeders: int = 0,
+        topic_size: str = "",
     ) -> int:
         """Add a download to the queue.  Returns the task DB id."""
         task_id = db.rt_enqueue(
@@ -88,6 +92,8 @@ class RutrackerDownloader:
             file_index=file_index,
             filename=filename,
             file_size=file_size,
+            seeders=seeders,
+            topic_size=topic_size,
         )
         task = DownloadTask(
             task_id=task_id,
@@ -98,6 +104,8 @@ class RutrackerDownloader:
             file_index=file_index,
             filename=filename,
             file_size=file_size,
+            seeders=seeders,
+            topic_size=topic_size,
         )
         self._queue.put_nowait(task)
         logger.info("Enqueued torrent download: topic=%s user=%s", topic_id, user_id)
@@ -116,8 +124,17 @@ class RutrackerDownloader:
                 self._queue.task_done()
 
     async def _process(self, task: DownloadTask) -> None:
+        started_at = time.time()
         db.rt_update_status(task.task_id, "downloading")
         logger.info("Downloading torrent topic=%s", task.topic_id)
+        await self._notify(
+            task.chat_id,
+            "🚀 <b>Задача запущена</b>\n"
+            f"ID: #{task.task_id}\n"
+            f"Сиды: {task.seeders}\n"
+            f"Размер релиза: {task.topic_size or '?'}\n"
+            f"Файл: <code>{task.filename or 'не указан'}</code>",
+        )
 
         # Download .torrent bytes
         torrent_bytes = await asyncio.get_event_loop().run_in_executor(
@@ -159,6 +176,8 @@ class RutrackerDownloader:
 
         db.rt_update_status(task.task_id, "done")
         logger.info("Downloaded %d audio files for topic %s", len(audio_files), task.topic_id)
+        elapsed = max(1, int(time.time() - started_at))
+        await self._notify(task.chat_id, f"📥 Скачивание завершено за {elapsed} сек. Готовлю отправку…")
 
         # Send to user
         await self._send_audio_files(task, audio_files)
