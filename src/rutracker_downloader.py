@@ -1,0 +1,208 @@
+"""Background torrent downloader using aria2c subprocess.
+
+Maintains a simple in-memory + DB queue.  Each task downloads a full
+torrent into a per-topic directory, then notifies the requesting user
+via Telegram.
+
+Requires: aria2c installed on the system (apt-get install aria2 / brew install aria2).
+"""
+from __future__ import annotations
+
+import asyncio
+import logging
+import os
+import shutil
+import subprocess
+import tempfile
+import time
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import TYPE_CHECKING, Optional
+
+from src import database as db
+from src import rutracker
+from src.config import RUTRACKER_DOWNLOAD_DIR
+
+if TYPE_CHECKING:
+    from telegram.ext import Application
+
+logger = logging.getLogger(__name__)
+
+AUDIO_EXTENSIONS = {".mp3", ".m4b", ".m4a", ".ogg", ".flac", ".opus", ".aac"}
+
+
+@dataclass
+class DownloadTask:
+    task_id: int
+    user_id: int
+    chat_id: int
+    topic_id: str
+    title: str
+    created_at: float = field(default_factory=time.time)
+
+
+class RutrackerDownloader:
+    """Singleton background downloader.  Call `start(app)` once at bot startup."""
+
+    _instance: Optional["RutrackerDownloader"] = None
+
+    def __new__(cls) -> "RutrackerDownloader":
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+            cls._instance._initialised = False
+        return cls._instance
+
+    def __init__(self) -> None:
+        if self._initialised:
+            return
+        self._app: Optional["Application"] = None
+        self._queue: asyncio.Queue[DownloadTask] = asyncio.Queue()
+        self._running = False
+        self._initialised = True
+
+    def start(self, app: "Application") -> None:
+        self._app = app
+        if not self._running:
+            self._running = True
+            asyncio.get_event_loop().create_task(self._worker())
+            logger.info("RutrackerDownloader: worker started")
+
+    def enqueue(self, user_id: int, chat_id: int, topic_id: str, title: str) -> int:
+        """Add a download to the queue.  Returns the task DB id."""
+        task_id = db.rt_enqueue(user_id, chat_id, topic_id, title)
+        task = DownloadTask(
+            task_id=task_id,
+            user_id=user_id,
+            chat_id=chat_id,
+            topic_id=topic_id,
+            title=title,
+        )
+        self._queue.put_nowait(task)
+        logger.info("Enqueued torrent download: topic=%s user=%s", topic_id, user_id)
+        return task_id
+
+    async def _worker(self) -> None:
+        while True:
+            task = await self._queue.get()
+            try:
+                await self._process(task)
+            except Exception as exc:
+                logger.exception("Download task %s failed: %s", task.task_id, exc)
+                db.rt_update_status(task.task_id, "failed")
+                await self._notify(task.chat_id, f"⚠️ Ошибка скачивания «{task.title}»: {exc}")
+            finally:
+                self._queue.task_done()
+
+    async def _process(self, task: DownloadTask) -> None:
+        db.rt_update_status(task.task_id, "downloading")
+        logger.info("Downloading torrent topic=%s", task.topic_id)
+
+        # Download .torrent bytes
+        torrent_bytes = await asyncio.get_event_loop().run_in_executor(
+            None, rutracker.download_torrent, task.topic_id
+        )
+
+        # Save torrent file to temp
+        dest_dir = Path(RUTRACKER_DOWNLOAD_DIR) / task.topic_id
+        dest_dir.mkdir(parents=True, exist_ok=True)
+
+        torrent_path = dest_dir / f"{task.topic_id}.torrent"
+        torrent_path.write_bytes(torrent_bytes)
+
+        # Run aria2c
+        ok = await asyncio.get_event_loop().run_in_executor(
+            None, _aria2c_download, str(torrent_path), str(dest_dir)
+        )
+        torrent_path.unlink(missing_ok=True)
+
+        if not ok:
+            raise RuntimeError("aria2c exited with non-zero code")
+
+        # Collect audio files
+        audio_files = sorted(
+            p for p in dest_dir.rglob("*") if p.suffix.lower() in AUDIO_EXTENSIONS
+        )
+        if not audio_files:
+            raise RuntimeError("No audio files found after download")
+
+        db.rt_update_status(task.task_id, "done")
+        logger.info("Downloaded %d audio files for topic %s", len(audio_files), task.topic_id)
+
+        # Send to user
+        await self._send_audio_files(task, audio_files)
+
+    async def _send_audio_files(
+        self, task: DownloadTask, audio_files: list[Path]
+    ) -> None:
+        if self._app is None:
+            return
+        bot = self._app.bot
+        count = len(audio_files)
+        await self._notify(
+            task.chat_id,
+            f"✅ <b>{task.title}</b>\n\nСкачалось {count} файл(ов). Отправляю...",
+        )
+        for idx, fpath in enumerate(audio_files, 1):
+            size_mb = fpath.stat().st_size / 1024 / 1024
+            if size_mb > 49:
+                await self._notify(
+                    task.chat_id,
+                    f"⚠️ Файл {fpath.name} слишком большой ({size_mb:.0f} МБ), пропускаю",
+                )
+                continue
+            try:
+                with open(fpath, "rb") as f:
+                    await bot.send_audio(
+                        chat_id=task.chat_id,
+                        audio=f,
+                        title=fpath.stem,
+                        filename=fpath.name,
+                        caption=f"[{idx}/{count}] {task.title}" if count > 1 else None,
+                    )
+            except Exception as exc:
+                logger.warning("Failed to send %s: %s", fpath.name, exc)
+                await self._notify(task.chat_id, f"⚠️ Не удалось отправить {fpath.name}: {exc}")
+
+        # Cleanup
+        shutil.rmtree(str(dest_dir_for_cleanup(task.topic_id)), ignore_errors=True)
+
+    async def _notify(self, chat_id: int, text: str) -> None:
+        if self._app is None:
+            return
+        try:
+            await self._app.bot.send_message(
+                chat_id=chat_id, text=text, parse_mode="HTML"
+            )
+        except Exception as exc:
+            logger.warning("Notify failed: %s", exc)
+
+
+def dest_dir_for_cleanup(topic_id: str) -> Path:
+    return Path(RUTRACKER_DOWNLOAD_DIR) / topic_id
+
+
+def _aria2c_download(torrent_path: str, dest_dir: str) -> bool:
+    """Run aria2c synchronously.  Returns True on success."""
+    aria2c = shutil.which("aria2c")
+    if not aria2c:
+        raise RuntimeError(
+            "aria2c not found. Install: apt-get install aria2 / brew install aria2"
+        )
+    cmd = [
+        aria2c,
+        "--dir", dest_dir,
+        "--seed-time=0",          # don't seed after download
+        "--max-connection-per-server=4",
+        "--split=4",
+        "--file-allocation=none",
+        "--console-log-level=warn",
+        "--quiet=true",
+        torrent_path,
+    ]
+    logger.info("aria2c cmd: %s", " ".join(cmd))
+    result = subprocess.run(cmd, timeout=7200)  # 2h max
+    return result.returncode == 0
+
+
+# Module-level singleton
+downloader = RutrackerDownloader()

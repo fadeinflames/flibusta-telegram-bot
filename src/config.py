@@ -57,17 +57,12 @@ AUDIOBOOK_CACHE_TTL_DAYS = 7
 AUDIO_MAX_SIZE = 50 * 1024 * 1024  # 50 MB — Telegram audio limit
 FFMPEG_TIMEOUT = 300  # seconds
 
-# ──────────────────── Bookmate / Яндекс Книги ────────────────────
-# Cookies needed for authenticated API calls (search, playlists).
-# Audio CDN downloads work without auth — only Origin/Referer headers required.
-BOOKMATE_SESSION_ID = os.getenv("BOOKMATE_SESSION_ID", "")
-BOOKMATE_L_COOKIE = os.getenv("BOOKMATE_L_COOKIE", "")
-BOOKMATE_SESSAR = os.getenv("BOOKMATE_SESSAR", "")
-BOOKMATE_YANDEX_LOGIN = os.getenv("BOOKMATE_YANDEX_LOGIN", "")
-
-BOOKMATE_SEARCH_URL = "https://api.bookmate.ru/api/v5/search"
-BOOKMATE_PLAYLISTS_URL = "https://books.yandex.ru/reader/p/api/v5/audiobooks/{uuid}/playlists.json"
-BOOKMATE_AUDIO_ORIGIN = "https://books.yandex.ru"
+# ──────────────────── RuTracker ────────────────────
+RUTRACKER_USERNAME = os.getenv("RUTRACKER_USERNAME", "")
+RUTRACKER_PASSWORD = os.getenv("RUTRACKER_PASSWORD", "")
+RUTRACKER_DOWNLOAD_DIR = os.getenv("RUTRACKER_DOWNLOAD_DIR", str(BASE_DIR / "downloads"))
+# Sub-forum IDs for audiobooks under category 33
+RUTRACKER_FORUMS = "2387,2388,2389,399,400,401,2346,2347,1803"
 
 # ──────────────────── Favorite shelves / tags ────────────────────
 FAVORITE_SHELVES = {

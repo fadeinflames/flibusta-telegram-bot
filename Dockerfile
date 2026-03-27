@@ -6,8 +6,8 @@ ENV PYTHONPATH=/srv \
 
 WORKDIR /srv
 
-# Системные зависимости (ffmpeg для конвертации HLS → MP3)
-RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg \
+# Системные зависимости (ffmpeg для конвертации HLS → MP3, aria2 для торрентов)
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg aria2 \
     && rm -rf /var/lib/apt/lists/*
 
 # Зависимости Python — тяжёлые пакеты в отдельном слое для лучшего кэширования

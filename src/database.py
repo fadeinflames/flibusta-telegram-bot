@@ -741,6 +741,18 @@ def init_audiobook_tables():
             "CREATE INDEX IF NOT EXISTS idx_audiobook_progress_user ON audiobook_progress(user_id)"
         )
 
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS rt_download_queue (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id     TEXT NOT NULL,
+                chat_id     INTEGER NOT NULL,
+                topic_id    TEXT NOT NULL,
+                title       TEXT NOT NULL,
+                status      TEXT NOT NULL DEFAULT 'pending',
+                created_at  REAL NOT NULL
+            )
+        """)
+
         conn.commit()
 
 
@@ -839,3 +851,44 @@ def get_audiobook_progress(user_id: str, book_id: str) -> dict | None:
             (user_id, book_id),
         ).fetchone()
         return dict(row) if row else None
+
+
+# ──────────────────────────────────────────────────────────
+# RuTracker download queue
+# ──────────────────────────────────────────────────────────
+
+import time as _time
+
+
+def rt_enqueue(user_id: int, chat_id: int, topic_id: str, title: str) -> int:
+    """Insert a pending download task.  Returns the new row id."""
+    with get_db() as conn:
+        cur = conn.execute(
+            """INSERT INTO rt_download_queue
+               (user_id, chat_id, topic_id, title, status, created_at)
+               VALUES (?, ?, ?, ?, 'pending', ?)""",
+            (str(user_id), chat_id, topic_id, title, _time.time()),
+        )
+        conn.commit()
+        return cur.lastrowid
+
+
+def rt_update_status(task_id: int, status: str) -> None:
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE rt_download_queue SET status = ? WHERE id = ?",
+            (status, task_id),
+        )
+        conn.commit()
+
+
+def rt_pending_for_user(user_id: int) -> list[dict]:
+    """Return tasks that are still pending/downloading for a user."""
+    with get_db() as conn:
+        rows = conn.execute(
+            """SELECT * FROM rt_download_queue
+               WHERE user_id = ? AND status IN ('pending', 'downloading')
+               ORDER BY created_at""",
+            (str(user_id),),
+        ).fetchall()
+        return [dict(r) for r in rows]

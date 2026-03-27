@@ -1,8 +1,6 @@
 TOKEN='0123456789:abracadabra'
 
-# Яндекс Книги / Bookmate (аудиокниги)
-# Получить из DevTools → Network → playlists.json → Copy as cURL
-BOOKMATE_SESSION_ID=''
-BOOKMATE_L_COOKIE=''
-BOOKMATE_SESSAR=''
-BOOKMATE_YANDEX_LOGIN=''
+# RuTracker (аудиокниги)
+RUTRACKER_USERNAME='ssdq'
+RUTRACKER_PASSWORD='123'
+# RUTRACKER_DOWNLOAD_DIR='/srv/downloads'  # по умолчанию ./downloads рядом с проектом

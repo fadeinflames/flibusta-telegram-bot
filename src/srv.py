@@ -42,6 +42,7 @@ from src.tg_bot import (
     universal_search,
 )
 from src.tg_bot_audio import audiobook_search_command, listening_command
+from src.rutracker_downloader import downloader as rt_downloader
 
 
 def main():
@@ -79,6 +80,10 @@ def main():
 
     # Создаем приложение с настроенным request
     app = ApplicationBuilder().token(token).request(request).build()
+
+    # Запускаем фоновый загрузчик RuTracker
+    rt_downloader.start(app)
+    print("[ OK ] RuTracker downloader запущен")
 
     # ===== ОСНОВНЫЕ КОМАНДЫ =====
     app.add_handler(CommandHandler("start", start_callback))
