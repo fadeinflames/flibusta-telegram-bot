@@ -10,9 +10,11 @@ WORKDIR /srv
 RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
-# Зависимости Python
+# Зависимости Python — тяжёлые пакеты в отдельном слое для лучшего кэширования
 COPY requirements.txt /srv/
-RUN pip install --no-cache-dir --timeout 300 --retries 5 -r requirements.txt
+RUN pip install --no-cache-dir --timeout 300 --retries 5 \
+        pycryptodome \
+    && pip install --no-cache-dir --timeout 300 --retries 5 -r requirements.txt
 
 # Директории для данных
 RUN mkdir -p /srv/books /srv/logs /srv/data

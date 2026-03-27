@@ -97,6 +97,14 @@ async def _show_audiobook_results(
     lines = [f"🎧 <b>Аудиокниги по запросу «{_escape(query)}»</b>",
              f"Найдено: {len(results)} | Страница {page}/{total_pages}\n"]
 
+    # Persist book_id→slug mapping so card handler can resolve slug for API calls
+    slug_map: dict = context.user_data.setdefault("ab_slug_map", {})
+    for item in results:
+        bid = item.get("book_id", "")
+        sl = item.get("slug", "")
+        if bid and sl:
+            slug_map[bid] = sl
+
     buttons = []
     for i, item in enumerate(chunk, start=start + 1):
         title = _escape(item.get("title", "—"))
@@ -104,9 +112,8 @@ async def _show_audiobook_results(
         duration = item.get("duration", "")
         dur_str = f" · {duration}" if duration else ""
         lines.append(f"{i}. <b>{title}</b>{dur_str}\n   <i>{author}</i>")
-        slug = item.get("slug", "")
-        book_id = item.get("book_id", "")
-        ref = slug or book_id
+        # Use book_id (short numeric) in callback_data — Telegram limit is 64 bytes
+        ref = item.get("book_id", "") or item.get("slug", "")
         buttons.append([InlineKeyboardButton(
             f"{i}. {item.get('title', '—')[:40]}",
             callback_data=f"ab_card_{ref}",
@@ -226,8 +233,8 @@ async def show_audiobook_card(slug_or_id: str, update: Update, context: Callback
         f"{progress_line}"
     )
 
-    # Keyboard
-    ref = slug or book_id
+    # Keyboard — always use book_id to stay within Telegram's 64-byte callback_data limit
+    ref = book_id
     start_ch = current_ch if progress else 0
     play_label = f"▶ Продолжить (гл. {start_ch + 1})" if progress and start_ch > 0 else "▶ Слушать с начала"
 
@@ -274,6 +281,8 @@ async def show_chapters_list(ref: str, page: int, update: Update, context: Callb
     title = cached["title"]
     book_id = cached["book_id"]
     slug = cached["slug"] or book_id
+    # Use book_id in all callback_data to stay within Telegram's 64-byte limit
+    cb_ref = book_id
 
     per_page = _CHAPTERS_PER_PAGE
     total_pages = max(1, (total + per_page - 1) // per_page)
@@ -291,20 +300,20 @@ async def show_chapters_list(ref: str, page: int, update: Update, context: Callb
         lines.append(f"{idx + 1}. {_escape(ch_title)}{dur_str}")
         buttons.append([InlineKeyboardButton(
             f"{idx + 1}. {ch_title[:45]}",
-            callback_data=f"ab_ch_{slug}|{idx}",
+            callback_data=f"ab_ch_{cb_ref}|{idx}",
         )])
 
     nav_row = []
     if page > 0:
-        nav_row.append(InlineKeyboardButton("◀", callback_data=f"ab_list_{slug}|{page - 1}"))
+        nav_row.append(InlineKeyboardButton("◀", callback_data=f"ab_list_{cb_ref}|{page - 1}"))
     if total_pages > 1:
         nav_row.append(InlineKeyboardButton(f"{page + 1}/{total_pages}", callback_data="ab_noop"))
     if page < total_pages - 1:
-        nav_row.append(InlineKeyboardButton("▶", callback_data=f"ab_list_{slug}|{page + 1}"))
+        nav_row.append(InlineKeyboardButton("▶", callback_data=f"ab_list_{cb_ref}|{page + 1}"))
     if nav_row:
         buttons.append(nav_row)
 
-    buttons.append([InlineKeyboardButton("◀ К книге", callback_data=f"ab_card_{slug}")])
+    buttons.append([InlineKeyboardButton("◀ К книге", callback_data=f"ab_card_{cb_ref}")])
 
     text = "\n".join(lines)
     kb = InlineKeyboardMarkup(buttons)
@@ -336,6 +345,8 @@ async def send_audio_chapter(
     if not cached:
         cached = await db_call(db.get_audiobook_cache_by_slug, ref)
 
+    # Resolve slug: DB cache → user_data slug_map → ref as-is
+    slug_map: dict = context.user_data.get("ab_slug_map", {})
     slug = ref
     title = ref
     author = ""
@@ -353,6 +364,8 @@ async def send_audio_chapter(
         else:
             chapter_title = f"Глава {chapter_idx + 1}"
     else:
+        # Not cached yet — try slug_map, then ref as-is
+        slug = slug_map.get(ref, ref)
         chapter_title = f"Глава {chapter_idx + 1}"
 
     # Status message
@@ -400,7 +413,7 @@ async def send_audio_chapter(
         + (f" · Глава {chapter_idx + 1}/{total}" if total > 1 else "")
     )
 
-    nav_kb = _chapter_nav_keyboard(slug, chapter_idx, total)
+    nav_kb = _chapter_nav_keyboard(cached["book_id"] if cached else ref, chapter_idx, total)
 
     await context.bot.send_audio(
         chat_id=chat_id,
@@ -437,8 +450,7 @@ async def listening_command(update: Update, context: CallbackContext) -> None:
     book_id = progress.get("book_id", "")
 
     cached = await db_call(db.get_audiobook_cache, book_id)
-    slug = cached["slug"] if cached else book_id
-    ref = slug or book_id
+    ref = book_id  # always use book_id in callback_data (64-byte limit)
 
     ch_name = ""
     if cached and cached.get("chapters"):
@@ -482,8 +494,11 @@ async def listening_command(update: Update, context: CallbackContext) -> None:
 
 
 async def handle_ab_card(data: str, query, update: Update, context: CallbackContext) -> None:
-    ref = data[len("ab_card_"):]
-    await show_audiobook_card(ref, update, context)
+    book_id = data[len("ab_card_"):]
+    # Resolve to slug if available (needed for first-time load from akniga.org)
+    slug_map: dict = context.user_data.get("ab_slug_map", {})
+    slug_or_id = slug_map.get(book_id, book_id)
+    await show_audiobook_card(slug_or_id, update, context)
 
 
 async def handle_ab_ch(data: str, query, update: Update, context: CallbackContext) -> None:
