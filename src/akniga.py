@@ -498,7 +498,9 @@ def download_chapter_hls(
     cmd += ["-i", m3u8_url]
     if duration_sec > 0:
         cmd += ["-t", str(duration_sec)]
-    cmd += ["-vn", "-acodec", "libmp3lame", "-q:a", "4", "-f", "mp3", "-"]
+    # 64kbps mono is sufficient for audiobooks and keeps file size within Telegram's 50MB limit
+    # (e.g. 90-minute chapter: 5400s × 64000bps ÷ 8 ≈ 43MB)
+    cmd += ["-vn", "-acodec", "libmp3lame", "-b:a", "64k", "-ac", "1", "-f", "mp3", "-"]
 
     try:
         result = subprocess.run(cmd, capture_output=True, timeout=config.FFMPEG_TIMEOUT)
