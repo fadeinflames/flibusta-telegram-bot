@@ -19,6 +19,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional, Set
 
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+
 from src import database as db
 from src import rutracker
 from src.config import RUTRACKER_DOWNLOAD_DIR
@@ -44,6 +46,7 @@ class DownloadTask:
     seeders: int = 0
     leeches: int = 0
     topic_size: str = ""
+    reading_chapter_pos: int = 0
     created_at: float = field(default_factory=time.time)
 
 
@@ -88,6 +91,7 @@ class RutrackerDownloader:
         seeders: int = 0,
         leeches: int = 0,
         topic_size: str = "",
+        reading_chapter_pos: int = 0,
     ) -> int:
         """Add a download to the queue.  Returns the task DB id."""
         task_id = db.rt_enqueue(
@@ -111,6 +115,7 @@ class RutrackerDownloader:
             seeders=seeders,
             leeches=leeches,
             topic_size=topic_size,
+            reading_chapter_pos=reading_chapter_pos,
         )
         self._queue.put_nowait(task)
         logger.info(
@@ -328,6 +333,7 @@ class RutrackerDownloader:
             return
         bot = self._app.bot
         count = len(audio_files)
+        sent_ok = False
         await self._notify(task.chat_id, f"✅ <b>{task.title}</b>\n\nСкачалось {count} файл(ов). Отправляю по порядку...")
         for idx, fpath in enumerate(audio_files, 1):
             logger.info("rt send: task_id=%s file=%s idx=%s/%s", task.task_id, fpath.name, idx, count)
@@ -374,6 +380,7 @@ class RutrackerDownloader:
                         filename=send_path.name,
                         caption=f"[{idx}/{count}] {task.title}" if count > 1 else None,
                     )
+                sent_ok = True
             except Exception as exc:
                 logger.warning("Failed to send %s: %s", send_path.name, exc)
                 await self._notify(task.chat_id, f"⚠️ Не удалось отправить {send_path.name}: {exc}")
@@ -381,9 +388,55 @@ class RutrackerDownloader:
                 if send_path != fpath:
                     send_path.unlink(missing_ok=True)
 
+        if sent_ok:
+            db.reading_progress_update_chapter(task.user_id, task.topic_id, task.reading_chapter_pos)
+            row = db.reading_progress_by_topic(task.user_id, task.topic_id)
+            if row and row.get("total_chapters", 0) > 1:
+                await self._send_chapter_nav_message(task.chat_id, task.topic_id, task.title, row)
+
         # Cleanup
         shutil.rmtree(str(dest_dir_for_cleanup(task.topic_id)), ignore_errors=True)
         logger.info("rt cleanup: task_id=%s topic=%s", task.task_id, task.topic_id)
+
+    async def _send_chapter_nav_message(
+        self,
+        chat_id: int,
+        topic_id: str,
+        title: str,
+        row: dict,
+    ) -> None:
+        """Кнопки пред/след глава после отправки аудио."""
+        if self._app is None:
+            return
+        cur = int(row.get("current_chapter") or 0)
+        total = int(row.get("total_chapters") or 0)
+        if total <= 1:
+            return
+        idx = cur + 1
+        text = (
+            f"🎧 <b>Сейчас в раздаче</b>\n{html.escape(title)}\n"
+            f"Файл {idx} из {total} — можно перейти к соседним:"
+        )
+        nav = []
+        if cur > 0:
+            nav.append(
+                InlineKeyboardButton("◀ Пред. глава", callback_data=f"rt_audio_prev_{topic_id}")
+            )
+        if cur < total - 1:
+            nav.append(
+                InlineKeyboardButton("▶ След. глава", callback_data=f"rt_audio_next_{topic_id}")
+            )
+        if not nav:
+            return
+        try:
+            await self._app.bot.send_message(
+                chat_id=chat_id,
+                text=text,
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup([nav]),
+            )
+        except Exception as exc:
+            logger.warning("chapter nav message failed: %s", exc)
 
     async def _notify(self, chat_id: int, text: str):
         if self._app is None:

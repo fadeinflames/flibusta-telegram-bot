@@ -146,6 +146,7 @@ def init_database():
         conn.commit()
 
     init_audiobook_tables()
+    init_reading_progress_tables()
 
 
 # ────────────────────── Пользователи ──────────────────────
@@ -832,6 +833,147 @@ def init_audiobook_tables():
                 pass
 
         conn.commit()
+
+
+def init_reading_progress_tables():
+    """Таблица прогресса чтения/прослушивания (в т.ч. аудио RuTracker)."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS reading_progress (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL,
+                kind TEXT NOT NULL DEFAULT 'audio',
+                flibusta_book_id TEXT,
+                rutracker_topic_id TEXT NOT NULL,
+                title TEXT NOT NULL,
+                author TEXT,
+                current_chapter INTEGER NOT NULL DEFAULT 0,
+                total_chapters INTEGER NOT NULL DEFAULT 0,
+                file_indices_json TEXT NOT NULL DEFAULT '[]',
+                updated_at REAL NOT NULL
+            )
+        """)
+        cursor.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_reading_progress_user_topic "
+            "ON reading_progress(user_id, rutracker_topic_id)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_reading_progress_user_updated "
+            "ON reading_progress(user_id, updated_at DESC)"
+        )
+        conn.commit()
+
+
+def reading_progress_upsert_audio(
+    user_id: int,
+    rutracker_topic_id: str,
+    title: str,
+    author: str,
+    flibusta_book_id: str | None,
+    file_indices: list[int],
+    current_chapter: int,
+) -> None:
+    """Сохранить прогресс по аудиорелизу RuTracker (одна строка на пользователя и топик)."""
+    now = time.time()
+    total = len(file_indices)
+    payload = json.dumps(file_indices, ensure_ascii=False)
+    with get_db() as conn:
+        conn.execute(
+            """
+            INSERT INTO reading_progress
+                (user_id, kind, flibusta_book_id, rutracker_topic_id, title, author,
+                 current_chapter, total_chapters, file_indices_json, updated_at)
+            VALUES (?, 'audio', ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(user_id, rutracker_topic_id) DO UPDATE SET
+                title=excluded.title,
+                author=excluded.author,
+                current_chapter=excluded.current_chapter,
+                total_chapters=excluded.total_chapters,
+                file_indices_json=excluded.file_indices_json,
+                updated_at=excluded.updated_at,
+                flibusta_book_id=COALESCE(excluded.flibusta_book_id, reading_progress.flibusta_book_id)
+            """,
+            (
+                str(user_id),
+                flibusta_book_id,
+                rutracker_topic_id,
+                title,
+                author or "",
+                current_chapter,
+                total,
+                payload,
+                now,
+            ),
+        )
+        conn.commit()
+
+
+def reading_progress_list(user_id: int, limit: int = 30) -> list[dict]:
+    """Список активных книг/релизов пользователя (новые сверху)."""
+    with get_db() as conn:
+        rows = conn.execute(
+            """
+            SELECT * FROM reading_progress
+            WHERE user_id = ?
+            ORDER BY updated_at DESC
+            LIMIT ?
+            """,
+            (str(user_id), limit),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def reading_progress_by_topic(user_id: int, topic_id: str) -> dict | None:
+    """Одна запись по RuTracker topic_id."""
+    with get_db() as conn:
+        row = conn.execute(
+            """
+            SELECT * FROM reading_progress
+            WHERE user_id = ? AND rutracker_topic_id = ?
+            """,
+            (str(user_id), topic_id),
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def reading_progress_by_id(user_id: int, row_id: int) -> dict | None:
+    """Запись по id (проверка user_id)."""
+    with get_db() as conn:
+        row = conn.execute(
+            """
+            SELECT * FROM reading_progress
+            WHERE user_id = ? AND id = ?
+            """,
+            (str(user_id), row_id),
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def reading_progress_update_chapter(user_id: int, topic_id: str, chapter_index: int) -> None:
+    """Обновить текущую главу/файл."""
+    now = time.time()
+    with get_db() as conn:
+        conn.execute(
+            """
+            UPDATE reading_progress
+            SET current_chapter = ?, updated_at = ?
+            WHERE user_id = ? AND rutracker_topic_id = ?
+            """,
+            (chapter_index, now, str(user_id), topic_id),
+        )
+        conn.commit()
+
+
+def reading_progress_delete(user_id: int, row_id: int) -> bool:
+    """Удалить запись прогресса."""
+    with get_db() as conn:
+        cur = conn.execute(
+            "DELETE FROM reading_progress WHERE user_id = ? AND id = ?",
+            (str(user_id), row_id),
+        )
+        conn.commit()
+        return cur.rowcount > 0
 
 
 def save_audiobook_cache(

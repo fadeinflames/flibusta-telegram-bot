@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 from pathlib import Path
@@ -194,6 +195,7 @@ async def handle_rt_auto(
 
     clean_title = re.sub(r"\s*\([a-zA-Z0-9]+\)\s*", " ", book.title).strip()
     search_query = clean_title
+    context.user_data["rt_flibusta_book_id"] = book_id
 
     try:
         await query.edit_message_reply_markup(reply_markup=None)
@@ -297,6 +299,31 @@ async def handle_rt_pick(
         ),
         None,
     )
+
+    file_indices = [f.index_in_torrent for f in files]
+    chapter_pos = next(
+        i for i, f in enumerate(files) if f.index_in_torrent == file_index
+    )
+    author = ""
+    fb_id = context.user_data.get("rt_flibusta_book_id")
+    if fb_id:
+        from src.tg_bot_helpers import book_from_cache
+
+        bk = await book_from_cache(str(fb_id))
+        if bk:
+            author = bk.author or ""
+
+    await db_call(
+        db.reading_progress_upsert_audio,
+        update.effective_user.id,
+        topic_id,
+        title,
+        author,
+        str(fb_id) if fb_id else None,
+        file_indices,
+        chapter_pos,
+    )
+
     task_id = downloader.enqueue(
         user_id=update.effective_user.id,
         chat_id=update.effective_chat.id,
@@ -308,6 +335,7 @@ async def handle_rt_pick(
         seeders=rt_topic.seeds if rt_topic else 0,
         leeches=rt_topic.leeches if rt_topic else 0,
         topic_size=rt_topic.size if rt_topic else "",
+        reading_chapter_pos=chapter_pos,
     )
     await query.edit_message_text(
         f"⏳ <b>Добавлено в очередь</b>\n\n"
@@ -541,28 +569,130 @@ async def audiobook_search_command(update: Update, context: CallbackContext) -> 
 
 @check_access
 async def listening_command(update: Update, context: CallbackContext) -> None:
-    """Активные загрузки аудио с RuTracker."""
-    user_id = update.effective_user.id
-    rows = await db_call(db.rt_pending_for_user, user_id)
-    if not rows:
-        extra = ""
-        if not RUTRACKER_USERNAME:
-            extra = "\n\n⚠️ RuTracker не настроен в .env."
-        await update.message.reply_text(
-            "🎧 <b>Нет активных загрузок</b>\n\n"
-            "Добавьте аудиокнигу с карточки книги или командой "
-            "<code>/audiobook запрос</code>."
-            + extra,
-            parse_mode=ParseMode.HTML,
-        )
-        return
+    """Тот же экран, что «Я читаю / слушаю» (прогресс + очередь)."""
+    from src.tg_bot_views import show_now_reading
 
-    lines = ["🎧 <b>Ваша очередь RuTracker</b>\n"]
-    for r in rows:
-        title = escape_html((r.get("title") or "")[:120])
-        st = escape_html(str(r.get("status") or ""))
-        fn = escape_html((r.get("filename") or "")[:60])
-        lines.append(f"• #{r.get('id')} — <i>{st}</i>\n  {title}")
-        if fn:
-            lines.append(f"  <code>{fn}</code>")
-    await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
+    await show_now_reading(update, context, edit=False)
+
+
+@check_access
+async def now_reading_command(update: Update, context: CallbackContext) -> None:
+    """Команда /now — экран текущих книг."""
+    from src.tg_bot_views import show_now_reading
+
+    await show_now_reading(update, context, edit=False)
+
+
+# ── prev/next глава, продолжить ──────────────────────────────────────────────
+
+
+async def _enqueue_rt_chapter_at(
+    update: Update,
+    context: CallbackContext,
+    topic_id: str,
+    chapter_index: int,
+) -> tuple[bool, str]:
+    """Поставить в очередь скачивание главы по индексу в reading_progress."""
+    user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
+    row = await db_call(db.reading_progress_by_topic, user_id, topic_id)
+    if not row:
+        return False, "no_progress"
+    indices = json.loads(row.get("file_indices_json") or "[]")
+    if chapter_index < 0 or chapter_index >= len(indices):
+        return False, "bounds"
+    file_index = indices[chapter_index]
+    loop = asyncio.get_event_loop()
+    files = await loop.run_in_executor(None, rutracker.get_topic_files, topic_id)
+    entry = next((f for f in files if f.index_in_torrent == file_index), None)
+    if not entry:
+        return False, "no_file"
+    await db_call(db.reading_progress_update_chapter, user_id, topic_id, chapter_index)
+    downloader.enqueue(
+        user_id=user_id,
+        chat_id=chat_id,
+        topic_id=topic_id,
+        title=row["title"],
+        file_index=file_index,
+        filename=entry.filename,
+        file_size=entry.size_bytes,
+        reading_chapter_pos=chapter_index,
+    )
+    return True, "ok"
+
+
+async def handle_rt_audio_prev(
+    data: str, query, update: Update, context: CallbackContext
+) -> None:
+    topic_id = data[len("rt_audio_prev_"):]
+    row = await db_call(db.reading_progress_by_topic, update.effective_user.id, topic_id)
+    if not row:
+        await query.answer("Нет сохранённого прогресса", show_alert=True)
+        return
+    cur = int(row["current_chapter"])
+    new_idx = cur - 1
+    if new_idx < 0:
+        await query.answer("Это первая глава", show_alert=True)
+        return
+    ok, _ = await _enqueue_rt_chapter_at(update, context, topic_id, new_idx)
+    if not ok:
+        await query.answer("Не удалось поставить в очередь", show_alert=True)
+        return
+    await query.answer("В очереди")
+    tot = int(row["total_chapters"])
+    await context.bot.send_message(
+        update.effective_chat.id,
+        f"⏳ Предыдущая глава ({new_idx + 1}/{tot}) — загружаю…",
+    )
+
+
+async def handle_rt_audio_next(
+    data: str, query, update: Update, context: CallbackContext
+) -> None:
+    topic_id = data[len("rt_audio_next_"):]
+    row = await db_call(db.reading_progress_by_topic, update.effective_user.id, topic_id)
+    if not row:
+        await query.answer("Нет сохранённого прогресса", show_alert=True)
+        return
+    cur = int(row["current_chapter"])
+    tot = int(row["total_chapters"])
+    new_idx = cur + 1
+    if new_idx >= tot:
+        await query.answer("Это последняя глава", show_alert=True)
+        return
+    ok, _ = await _enqueue_rt_chapter_at(update, context, topic_id, new_idx)
+    if not ok:
+        await query.answer("Не удалось поставить в очередь", show_alert=True)
+        return
+    await query.answer("В очереди")
+    await context.bot.send_message(
+        update.effective_chat.id,
+        f"⏳ Следующая глава ({new_idx + 1}/{tot}) — загружаю…",
+    )
+
+
+async def handle_reading_go(
+    data: str, query, update: Update, context: CallbackContext
+) -> None:
+    """Продолжить с текущей сохранённой главы."""
+    try:
+        row_id = int(data[len("reading_go_"):])
+    except ValueError:
+        await query.answer("Ошибка", show_alert=True)
+        return
+    row = await db_call(db.reading_progress_by_id, update.effective_user.id, row_id)
+    if not row:
+        await query.answer("Запись не найдена", show_alert=True)
+        return
+    topic_id = row["rutracker_topic_id"]
+    ch = int(row["current_chapter"])
+    ok, _ = await _enqueue_rt_chapter_at(update, context, topic_id, ch)
+    if not ok:
+        await query.answer("Не удалось поставить в очередь", show_alert=True)
+        return
+    await query.answer("В очереди")
+    tot = int(row["total_chapters"])
+    await context.bot.send_message(
+        update.effective_chat.id,
+        f"⏳ Продолжаю с файла {ch + 1}/{tot} — загружаю…",
+    )

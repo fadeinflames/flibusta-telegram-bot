@@ -47,7 +47,7 @@ from src.tg_bot import (
     start_callback,
     universal_search,
 )
-from src.tg_bot_rutracker import audiobook_search_command, listening_command
+from src.tg_bot_rutracker import audiobook_search_command, listening_command, now_reading_command
 
 
 def main():
@@ -91,14 +91,7 @@ def main():
     # Создаем приложение с настроенным request
     app = ApplicationBuilder().token(token).request(request).build()
 
-    # Запускаем фоновый загрузчик RuTracker
-    from src.rutracker_downloader import downloader as rt_downloader
-    from src.config import RUTRACKER_USERNAME
-    if RUTRACKER_USERNAME:
-        rt_downloader.start(app)
-        print("[ OK ] RuTracker downloader запущен")
-
-    # Запускаем фоновый загрузчик RuTracker
+    # Фоновый загрузчик RuTracker
     rt_downloader.start(app)
     print("[ OK ] RuTracker downloader запущен")
 
@@ -117,6 +110,7 @@ def main():
     # ===== АУДИОКНИГИ =====
     app.add_handler(CommandHandler("audiobook", audiobook_search_command))
     app.add_handler(CommandHandler("listening", listening_command))
+    app.add_handler(CommandHandler("now", now_reading_command))
 
     # ===== ЛИЧНЫЙ КАБИНЕТ =====
     app.add_handler(CommandHandler("favorites", favorites_command))
@@ -158,7 +152,7 @@ def main():
     print()
     print("АУДИОКНИГИ (RuTracker):")
     print("  /audiobook <запрос>  - поиск аудиокниг на RuTracker")
-    print("  /listening           - очередь загрузок аудио")
+    print("  /listening, /now     - что читаю / слушаю (прогресс + очередь)")
     print()
     print("КОМАНДЫ ПОИСКА:")
     print("  /title <название>    - поиск по названию")

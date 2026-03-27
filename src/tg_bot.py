@@ -58,6 +58,9 @@ from src.tg_bot_nav import pop_nav as _pop_nav
 from src.tg_bot_nav import push_nav as _push_nav
 from src.tg_bot_presentation import escape_html, shelf_label
 from src.tg_bot_rutracker import (
+    handle_reading_go,
+    handle_rt_audio_next,
+    handle_rt_audio_prev,
     handle_rt_auto,
     handle_rt_dl,
     handle_rt_files_page,
@@ -80,6 +83,7 @@ from src.tg_bot_views import (
     show_books_page,
     show_main_menu,
     show_main_menu_command,
+    show_now_reading,
     show_search_menu,
     show_user_downloads,
     show_user_history,
@@ -589,6 +593,9 @@ _PREFIX_HANDLERS = [
     ("rt_pick_", handle_rt_pick, False),
     ("rt_files_page_", handle_rt_files_page, True),
     ("rt_page_", handle_rt_page, True),
+    ("rt_audio_prev_", handle_rt_audio_prev, False),
+    ("rt_audio_next_", handle_rt_audio_next, False),
+    ("reading_go_", handle_reading_go, False),
 ]
 
 
@@ -721,6 +728,11 @@ async def button(update: Update, context: CallbackContext) -> None:
         return
 
     # ── Navigation exact matches ──
+    if data == "now_reading":
+        await query.answer()
+        await show_now_reading(update, context, edit=True)
+        return
+
     if data == "main_menu":
         await query.answer()
         await show_main_menu(update, context)

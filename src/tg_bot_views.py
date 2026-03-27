@@ -385,6 +385,9 @@ def _main_menu_keyboard(last_search: dict | None):
             InlineKeyboardButton("⭐ Избранное", callback_data="show_favorites_1"),
         ],
         [
+            InlineKeyboardButton("📚 Я читаю / слушаю", callback_data="now_reading"),
+        ],
+        [
             InlineKeyboardButton("📜 История", callback_data="show_history"),
             InlineKeyboardButton("📊 Статистика", callback_data="show_my_stats"),
         ],
@@ -479,6 +482,68 @@ async def show_main_menu(update: Update, context: CallbackContext):
 
     reply_markup = InlineKeyboardMarkup(_main_menu_keyboard(last))
     await safe_edit_or_send(update.callback_query, context, text, reply_markup)
+
+
+async def show_now_reading(update: Update, context: CallbackContext, *, edit: bool = False) -> None:
+    """Экран «Я читаю / слушаю»: прогресс по аудио RuTracker и очередь загрузок."""
+    user_id = update.effective_user.id
+    rows = await db_call(db.reading_progress_list, user_id, limit=15)
+    pending = await db_call(db.rt_pending_for_user, user_id)
+
+    body_lines: list[str] = []
+    kb_rows = []
+
+    if rows:
+        body_lines.append("<b>Аудиокниги (RuTracker)</b>")
+        for r in rows:
+            title = escape_html((r.get("title") or "Без названия")[:100])
+            cur = int(r.get("current_chapter") or 0)
+            tot = int(r.get("total_chapters") or 1)
+            body_lines.append(f"• {title}\n  Файл {cur + 1} из {tot}")
+            kb_rows.append(
+                [
+                    InlineKeyboardButton(
+                        f"▶ Продолжить: {title[:36]}",
+                        callback_data=f"reading_go_{r['id']}",
+                    )
+                ]
+            )
+    else:
+        body_lines.append(
+            "Пока нет сохранённого прогресса по аудио.\n"
+            "Выберите файл в раздаче RuTracker — бот запомнит главу."
+        )
+
+    if pending:
+        body_lines.append("")
+        body_lines.append(f"<b>В очереди загрузок</b> ({len(pending)}):")
+        for p in pending[:8]:
+            st = escape_html(str(p.get("status") or ""))
+            t = escape_html((p.get("title") or "")[:70])
+            body_lines.append(f"• #{p.get('id')} — <i>{st}</i> — {t}")
+
+    text = screen(
+        "📚 <b>Я читаю / слушаю</b>",
+        "\n\n".join(body_lines),
+        breadcrumbs("🏠 Меню", "📚 Сейчас"),
+    )
+    kb_rows.append(
+        [
+            InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu"),
+        ]
+    )
+    reply_markup = InlineKeyboardMarkup(kb_rows)
+
+    if edit and update.callback_query:
+        await safe_edit_or_send(update.callback_query, context, text, reply_markup)
+    elif update.message:
+        await update.message.reply_text(
+            text, parse_mode=ParseMode.HTML, reply_markup=reply_markup
+        )
+    elif update.callback_query:
+        await update.callback_query.message.reply_text(
+            text, parse_mode=ParseMode.HTML, reply_markup=reply_markup
+        )
 
 
 async def show_search_menu(update: Update, context: CallbackContext):
