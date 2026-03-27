@@ -319,7 +319,21 @@ async def rt_admin_queue(update: Update, context: CallbackContext) -> None:
     text = "\n".join(lines)
     if len(text) > 4096:
         text = text[:4092] + "…"
-    await update.message.reply_text(text, parse_mode=ParseMode.HTML)
+    kb = InlineKeyboardMarkup(
+        [[InlineKeyboardButton("🗑 Delete all", callback_data="admin_rt_del_all")]]
+    )
+    await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
+
+
+@check_access
+async def rt_admin_delete_all(update: Update, context: CallbackContext) -> None:
+    """/rtdelall — очистить всю очередь RuTracker и файлы (admin only)."""
+    user_id = str(update.effective_user.id)
+    if not (ADMIN_USER_ID and user_id == ADMIN_USER_ID):
+        await update.message.reply_text("❌ У вас нет прав для этой команды.")
+        return
+    ok, msg = rt_downloader.delete_all_tasks()
+    await update.message.reply_text(f"{'✅' if ok else '❌'} {msg}")
 
 
 @check_access
@@ -607,6 +621,23 @@ async def button(update: Update, context: CallbackContext) -> None:
 
     if data in ("ab_noop", "rt_noop"):
         await query.answer()
+        return
+
+    if data == "admin_rt_del_all":
+        user_id = str(update.effective_user.id)
+        if not (ADMIN_USER_ID and user_id == ADMIN_USER_ID):
+            await query.answer("Нет доступа", show_alert=True)
+            return
+        await query.answer("Удаляю…")
+        ok, msg = rt_downloader.delete_all_tasks()
+        summary = f"🗑 <b>Очередь очищена</b>\n\n{escape_html(msg)}"
+        try:
+            await query.edit_message_text(summary, parse_mode=ParseMode.HTML)
+        except BadRequest:
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text=f"🗑 Очередь очищена\n\n{msg}",
+            )
         return
 
     if data == "page_jump":

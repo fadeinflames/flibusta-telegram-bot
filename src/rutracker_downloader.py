@@ -165,6 +165,23 @@ class RutrackerDownloader:
         self._cancelled_ids.discard(task_id)
         return True, "Удалено"
 
+    def delete_all_tasks(self) -> tuple[bool, str]:
+        """Clear entire queue: kill active aria2c, delete all DB rows, wipe all topic dirs."""
+        topic_ids = db.rt_all_topic_ids()
+        if self._active_proc:
+            try:
+                self._active_proc.terminate()
+            except ProcessLookupError:
+                pass
+            logger.info("rt delete_all: terminated active aria2c")
+        self._active_task_id = None
+        self._active_proc = None
+        self._cancelled_ids.clear()
+        deleted = db.rt_delete_all_rows()
+        for tid in topic_ids:
+            self.delete_task_files(tid)
+        return True, f"Удалено записей: {deleted}, каталогов раздач: {len(topic_ids)}"
+
     async def _handle_cancelled_mid_task(self, task: DownloadTask) -> None:
         self._cancelled_ids.discard(task.task_id)
         if db.rt_get_task(task.task_id):

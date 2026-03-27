@@ -38,6 +38,7 @@ from src.tg_bot import (
     setpage_command,
     settings_command,
     rt_admin_delete,
+    rt_admin_delete_all,
     rt_admin_queue,
     rt_admin_stop,
     show_stats,
@@ -120,6 +121,7 @@ def main():
     app.add_handler(CommandHandler("rtqueue", rt_admin_queue))
     app.add_handler(CommandHandler("rtstop", rt_admin_stop))
     app.add_handler(CommandHandler("rtdel", rt_admin_delete))
+    app.add_handler(CommandHandler("rtdelall", rt_admin_delete_all))
 
     # ===== ОБРАБОТЧИКИ =====
     app.add_handler(CallbackQueryHandler(button))
@@ -168,6 +170,7 @@ def main():
     print("  /rtqueue [N]         - очередь RuTracker")
     print("  /rtstop <id>         - отменить задачу RuTracker")
     print("  /rtdel <id>          - удалить задачу и файлы на диске")
+    print("  /rtdelall            - очистить всю очередь RuTracker")
     print()
     print("Подсказка: начните с команды /start")
     print("=" * 50)

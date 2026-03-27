@@ -922,6 +922,23 @@ def rt_delete_task(task_id: int) -> bool:
         return cur.rowcount > 0
 
 
+def rt_all_topic_ids() -> list[str]:
+    """Distinct topic_id values currently in the queue (for disk cleanup)."""
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT DISTINCT topic_id FROM rt_download_queue",
+        ).fetchall()
+        return [str(r["topic_id"]) for r in rows]
+
+
+def rt_delete_all_rows() -> int:
+    """Remove all RuTracker queue rows. Returns number of deleted rows."""
+    with get_db() as conn:
+        cur = conn.execute("DELETE FROM rt_download_queue")
+        conn.commit()
+        return cur.rowcount
+
+
 def rt_pending_for_user(user_id: int) -> list[dict]:
     """Return tasks that are still pending/downloading for a user."""
     with get_db() as conn:
