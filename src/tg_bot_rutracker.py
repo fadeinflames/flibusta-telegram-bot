@@ -1,15 +1,16 @@
 """Telegram handlers for RuTracker audiobook search and download."""
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ParseMode
 from telegram.ext import CallbackContext
 
-from src import database as db
 from src import rutracker
 from src.rutracker_downloader import downloader
+from src.tg_bot_presentation import escape_html
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +21,7 @@ _FILES_PER_PAGE = 10
 _RT_RESULTS_KEY = "rt_search_results"
 _RT_FILES_KEY = "rt_topic_files"
 _TG_AUDIO_LIMIT = 49 * 1024 * 1024
+_TG_MSG_MAX = 4096
 
 
 def _fmt_size(raw: str) -> str:
@@ -165,7 +167,7 @@ async def handle_rt_dl(
     results: list[rutracker.RTopic] = cached.get("results", [])
     title = next((t.title for t in results if t.topic_id == topic_id), f"Топик {topic_id}")
 
-    files = await _do_topic_files(topic_id, context)
+    files, info = await _gather_topic_files_and_info(topic_id)
     logger.info("rt dl: topic=%s files=%s", topic_id, len(files))
     if not files:
         await query.edit_message_text(
@@ -174,10 +176,14 @@ async def handle_rt_dl(
         )
         return
 
+    page_title = info.title if info else title
     context.user_data[_RT_FILES_KEY] = {
         "topic_id": topic_id,
-        "title": title,
+        "title": page_title,
         "files": files,
+        "description": (info.description if info else "") or "",
+        "forum_name": (info.forum_name if info else "") or "",
+        "topic_url": (info.topic_url if info else "") or f"https://rutracker.org/forum/viewtopic.php?t={topic_id}",
     }
     await _show_rt_topic_files(update, context, page=0, edit=True)
 
@@ -271,6 +277,9 @@ async def _show_rt_topic_files(update: Update, context: CallbackContext, page: i
     topic_id = cached.get("topic_id")
     title = cached.get("title", "RuTracker")
     files: list[rutracker.FileEntry] = cached.get("files", [])
+    description = (cached.get("description") or "").strip()
+    forum_name = (cached.get("forum_name") or "").strip()
+    topic_url = (cached.get("topic_url") or "").strip()
     if not topic_id or not files:
         if update.callback_query:
             await update.callback_query.edit_message_text("Результаты устарели. Откройте список заново.")
@@ -283,18 +292,36 @@ async def _show_rt_topic_files(update: Update, context: CallbackContext, page: i
     chunk = files[start : start + _FILES_PER_PAGE]
 
     lines = [
-        f"🎧 <b>{title}</b>",
-        "",
-        f"Выберите главу/файл для скачивания ({total}):",
-        f"Страница {page + 1}/{total_pages}",
-        "",
+        f"🎧 <b>{escape_html(title)}</b>",
     ]
+    if forum_name:
+        lines.append(f"📂 <i>{escape_html(forum_name)}</i>")
+    if topic_url:
+        lines.append(f'🔗 <a href="{escape_html(topic_url)}">Открыть раздачу на RuTracker</a>')
+    lines.append("")
+    if page == 0 and description:
+        # Подробное описание — только на первой странице (урезаем при нехватке места)
+        desc_html = escape_html(description)
+        lines.append("📝 <b>Описание раздачи</b>")
+        lines.append(f"<i>{desc_html}</i>")
+        lines.append("")
+    elif page > 0 and description:
+        lines.append("<i>… описание раздачи — на первой странице …</i>")
+        lines.append("")
+
+    lines.extend(
+        [
+            f"Выберите главу/файл для скачивания ({total}):",
+            f"Страница {page + 1}/{total_pages}",
+            "",
+        ]
+    )
     rows = []
     for i, entry in enumerate(chunk, start=start + 1):
         size_str = _fmt_bytes(entry.size_bytes)
         warn = " ⚠️ >49MB" if entry.size_bytes > _TG_AUDIO_LIMIT else ""
         short_name = entry.filename.rsplit("/", 1)[-1]
-        lines.append(f"{i}. {short_name} — {size_str}{warn}")
+        lines.append(f"{i}. {escape_html(short_name)} — {size_str}{warn}")
         rows.append([InlineKeyboardButton(f"{i}. {short_name[:34]}", callback_data=f"rt_pick_{entry.index_in_torrent}")])
 
     nav = []
@@ -308,6 +335,38 @@ async def _show_rt_topic_files(update: Update, context: CallbackContext, page: i
         rows.append(nav)
 
     text = "\n".join(lines)
+    if len(text) > _TG_MSG_MAX:
+        # Сжимаем описание, чтобы влезли кнопки
+        overhead = len(text) - _TG_MSG_MAX + 500
+        if page == 0 and description and overhead > 0:
+            desc_short = escape_html(description[: max(0, len(description) - overhead - 50)]) + "…"
+            lines = [
+                f"🎧 <b>{escape_html(title)}</b>",
+            ]
+            if forum_name:
+                lines.append(f"📂 <i>{escape_html(forum_name)}</i>")
+            if topic_url:
+                lines.append(f'🔗 <a href="{escape_html(topic_url)}">Открыть раздачу на RuTracker</a>')
+            lines.extend(["", "📝 <b>Описание раздачи</b>", f"<i>{desc_short}</i>", ""])
+            lines.extend(
+                [
+                    f"Выберите главу/файл для скачивания ({total}):",
+                    f"Страница {page + 1}/{total_pages}",
+                    "",
+                ]
+            )
+            for i, entry in enumerate(chunk, start=start + 1):
+                size_str = _fmt_bytes(entry.size_bytes)
+                warn = " ⚠️ >49MB" if entry.size_bytes > _TG_AUDIO_LIMIT else ""
+                short_name = entry.filename.rsplit("/", 1)[-1]
+                lines.append(f"{i}. {escape_html(short_name)} — {size_str}{warn}")
+            text = "\n".join(lines)
+        if len(text) > _TG_MSG_MAX:
+            text = text[: _TG_MSG_MAX - 4] + "…"
+
+    if topic_url:
+        rows.append([InlineKeyboardButton("🌐 Раздача на RuTracker", url=topic_url)])
+
     kb = InlineKeyboardMarkup(rows)
     if edit and update.callback_query:
         await update.callback_query.edit_message_text(text, reply_markup=kb, parse_mode=ParseMode.HTML)
@@ -319,9 +378,31 @@ async def _show_rt_topic_files(update: Update, context: CallbackContext, page: i
 
 # ── internal ──────────────────────────────────────────────────────────────────
 
-async def _do_search(query: str, context: CallbackContext) -> list[rutracker.RTopic]:
-    import asyncio
 
+async def _gather_topic_files_and_info(
+    topic_id: str,
+) -> tuple[list[rutracker.FileEntry], rutracker.RTopicFiles | None]:
+    """Параллельно: список аудио из .torrent и страница топика с описанием."""
+    loop = asyncio.get_event_loop()
+    files_t, info_t = await asyncio.gather(
+        loop.run_in_executor(None, rutracker.get_topic_files, topic_id),
+        loop.run_in_executor(None, rutracker.get_topic_info, topic_id),
+        return_exceptions=True,
+    )
+    files: list[rutracker.FileEntry] = []
+    if isinstance(files_t, Exception):
+        logger.exception("RuTracker file list error: topic=%s", topic_id)
+    else:
+        files = files_t
+    info: rutracker.RTopicFiles | None = None
+    if isinstance(info_t, Exception):
+        logger.warning("RuTracker topic info error: topic=%s err=%s", topic_id, info_t)
+    else:
+        info = info_t
+    return files, info
+
+
+async def _do_search(query: str, context: CallbackContext) -> list[rutracker.RTopic]:
     loop = asyncio.get_event_loop()
     try:
         return await loop.run_in_executor(None, rutracker.search, query)

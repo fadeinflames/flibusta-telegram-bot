@@ -98,6 +98,8 @@ class RTopicFiles:
     topic_id: str
     title: str
     description: str
+    forum_name: str = ""
+    topic_url: str = ""
     files: list[str] = field(default_factory=list)  # filenames from torrent
     audio_files: list[str] = field(default_factory=list)  # mp3/m4b/flac etc.
 
@@ -192,20 +194,59 @@ def search(query: str, limit: int = 10) -> list[RTopic]:
     return results
 
 
+def _clean_topic_description(raw: str, max_len: int = 3500) -> str:
+    """Normalize whitespace; cap length for Telegram."""
+    if not raw:
+        return ""
+    text = re.sub(r"[ \t]+\n", "\n", raw)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    text = text.strip()
+    if len(text) > max_len:
+        text = text[: max_len - 1].rstrip() + "…"
+    return text
+
+
 def get_topic_info(topic_id: str) -> RTopicFiles:
-    """Fetch topic page, parse description and file list from torrent."""
+    """Fetch topic page: full title, forum, long description (first post body)."""
     s = get_session()
-    resp = s.get(f"{_BASE}/viewtopic.php?t={topic_id}", timeout=15)
+    topic_url = f"{_BASE}/viewtopic.php?t={topic_id}"
+    resp = s.get(topic_url, timeout=20)
     resp.raise_for_status()
 
     soup = BeautifulSoup(resp.content, "lxml")
-    title_tag = soup.select_one("h1.maintitle, #topic-title")
+    title_tag = soup.select_one("h1.maintitle, a.maintitle, #topic-title")
     title = title_tag.get_text(strip=True) if title_tag else f"Топик {topic_id}"
 
-    post_body = soup.select_one("div.post_body")
-    description = post_body.get_text("\n", strip=True)[:800] if post_body else ""
+    forum_name = ""
+    # Breadcrumb: last link before topic is often the subforum
+    for a in soup.select('a[href*="viewforum.php"]'):
+        fn = a.get_text(strip=True)
+        if fn and len(fn) < 120:
+            forum_name = fn
+    # Fallback: nav row
+    if not forum_name:
+        nav = soup.select_one("td.nav, p.nav")
+        if nav:
+            links = nav.select("a")
+            if links:
+                forum_name = links[-1].get_text(strip=True)[:120]
 
-    return RTopicFiles(topic_id=topic_id, title=title, description=description)
+    post_body = soup.select_one("div.post_body")
+    if post_body:
+        # Remove quote blocks noise (optional)
+        for tag in post_body.select("div.sp-wrap, script, style"):
+            tag.decompose()
+        description = _clean_topic_description(post_body.get_text("\n", strip=True))
+    else:
+        description = ""
+
+    return RTopicFiles(
+        topic_id=topic_id,
+        title=title,
+        description=description,
+        forum_name=forum_name,
+        topic_url=topic_url,
+    )
 
 
 def download_torrent(topic_id: str) -> bytes:
