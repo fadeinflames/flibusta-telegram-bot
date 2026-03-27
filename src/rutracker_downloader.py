@@ -92,8 +92,6 @@ class RutrackerDownloader:
             file_index=file_index,
             filename=filename,
             file_size=file_size,
-            seeders=seeders,
-            topic_size=topic_size,
         )
         task = DownloadTask(
             task_id=task_id,
