@@ -27,6 +27,12 @@ from src.tg_bot_audio import (
     handle_ab_ch,
     handle_ab_list,
     handle_ab_page,
+    handle_bm_auto,
+    handle_bm_back,
+    handle_bm_card,
+    handle_bm_list,
+    handle_bm_page,
+    handle_bm_track,
 )
 from src.tg_bot_download import (  # noqa: F401
     get_book_by_format,
@@ -481,6 +487,13 @@ _PREFIX_HANDLERS = [
     ("ab_list_", handle_ab_list, False),
     ("ab_page_", handle_ab_page, True),
     ("ab_back_results", handle_ab_back_results, False),
+    # Audiobooks (Bookmate / Яндекс Книги)
+    ("bm_auto_", handle_bm_auto, False),
+    ("bm_card_", handle_bm_card, False),
+    ("bm_tr_", handle_bm_track, False),
+    ("bm_list_", handle_bm_list, False),
+    ("bm_page_", handle_bm_page, True),
+    ("bm_back", handle_bm_back, False),
 ]
 
 

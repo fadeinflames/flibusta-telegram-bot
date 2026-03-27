@@ -1,1 +1,8 @@
 TOKEN='0123456789:abracadabra'
+
+# Яндекс Книги / Bookmate (аудиокниги)
+# Получить из DevTools → Network → playlists.json → Copy as cURL
+BOOKMATE_SESSION_ID=''
+BOOKMATE_L_COOKIE=''
+BOOKMATE_SESSAR=''
+BOOKMATE_YANDEX_LOGIN=''
