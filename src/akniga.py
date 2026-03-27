@@ -112,12 +112,27 @@ def cryptojs_decrypt(ciphertext_json: str, passphrase: str = AJAX_KEY) -> str:
 def search_audiobooks(query: str, page: int = 1) -> list[dict]:
     """Search audiobooks on akniga.org. Returns list of dicts with basic metadata."""
     session = _get_session()
-    encoded = quote(query, safe="")
-    url = f"{SITE}/search/q/{encoded}/page{page}/" if page > 1 else f"{SITE}/search/q/{encoded}/"
+    params: dict = {"q": query}
+    if page > 1:
+        params["page"] = page
+    url = f"{SITE}/search/"
 
     try:
-        resp = session.get(url, timeout=config.REQUEST_TIMEOUT)
+        resp = session.get(url, params=params, timeout=config.REQUEST_TIMEOUT)
         resp.raise_for_status()
+    except requests.exceptions.HTTPError as e:
+        # Try fallback URL format
+        if e.response is not None and e.response.status_code == 404:
+            try:
+                fallback = f"{SITE}/?q={quote(query, safe='')}"
+                resp = session.get(fallback, timeout=config.REQUEST_TIMEOUT)
+                resp.raise_for_status()
+            except requests.RequestException as e2:
+                logger.error("akniga search failed (fallback)", exc_info=e2, extra={"query": query})
+                return []
+        else:
+            logger.error("akniga search failed", exc_info=e, extra={"query": query})
+            return []
     except requests.RequestException as e:
         logger.error("akniga search failed", exc_info=e, extra={"query": query})
         return []

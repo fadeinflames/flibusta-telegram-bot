@@ -1,6 +1,7 @@
 """Telegram handlers for audiobook search and playback (akniga.org)."""
 
 import io
+import re
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ParseMode
@@ -539,7 +540,8 @@ async def handle_ab_auto(data: str, query, update: Update, context: CallbackCont
         await query.answer("Книга не найдена в кэше", show_alert=True)
         return
 
-    search_query = f"{book.title} {book.author}".strip()
+    # Clean title — strip format markers like "(fb2)", "(pdf)" that Flibusta puts in titles
+    clean_title = re.sub(r"\s*\([a-zA-Z0-9]+\)\s*", " ", book.title).strip()
 
     # Show searching status
     try:
@@ -549,29 +551,30 @@ async def handle_ab_auto(data: str, query, update: Update, context: CallbackCont
 
     msg = await context.bot.send_message(
         update.effective_chat.id,
-        f"🔍 Ищу аудиокнигу: <b>{_escape(book.title)}</b>…",
+        f"🔍 Ищу аудиокнигу: <b>{_escape(clean_title)}</b>…",
         parse_mode=ParseMode.HTML,
     )
 
+    # Search by clean title + author first, then title only as fallback
+    search_query = f"{clean_title} {book.author}".strip()
     results = await flib_call(akniga.search_audiobooks, search_query)
 
-    # If no results, try title only
     if not results:
-        results = await flib_call(akniga.search_audiobooks, book.title)
+        results = await flib_call(akniga.search_audiobooks, clean_title)
 
     await msg.delete()
 
     if not results:
         await context.bot.send_message(
             update.effective_chat.id,
-            f"😔 Аудиокниги для <b>{_escape(book.title)}</b> не найдены на akniga.org.\n\n"
-            f"Можно поискать вручную: <code>/audiobook {_escape(book.title)}</code>",
+            f"😔 Аудиокниги для <b>{_escape(clean_title)}</b> не найдены на akniga.org.\n\n"
+            f"Можно поискать вручную: <code>/audiobook {_escape(clean_title)}</code>",
             parse_mode=ParseMode.HTML,
         )
         return
 
     context.user_data["ab_search_results"] = results
-    context.user_data["ab_search_query"] = book.title
+    context.user_data["ab_search_query"] = clean_title
 
     await _show_audiobook_results(results, book.title, page=1, update=update, context=context)
 

@@ -12,7 +12,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg \
 
 # Зависимости Python
 COPY requirements.txt /srv/
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --timeout 120 --retries 5 \
+    -i https://mirror.yandex.ru/pypi/simple/ \
+    --trusted-host mirror.yandex.ru \
+    -r requirements.txt
 
 # Директории для данных
 RUN mkdir -p /srv/books /srv/logs /srv/data
