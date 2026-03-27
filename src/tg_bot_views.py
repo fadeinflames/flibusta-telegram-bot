@@ -717,3 +717,106 @@ async def show_user_settings(update: Update, context: CallbackContext, *, from_c
         await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=reply_markup)
     else:
         await safe_edit_or_send(update.callback_query, context, text, reply_markup)
+
+
+# ════════════════════════════════════════════════════════════
+#                      NOW READING / LISTENING
+# ════════════════════════════════════════════════════════════
+
+
+async def show_now_reading(update: Update, context: CallbackContext, *, from_command: bool = False):
+    """Screen showing books and audiobooks currently being read/listened to."""
+    user_id = str(update.effective_user.id)
+
+    reading_books = await db_call(db.get_reading_books, user_id)
+    audio_progress = await db_call(db.get_all_user_audiobook_progress, user_id)
+
+    has_content = bool(reading_books) or bool(audio_progress)
+
+    if not has_content:
+        text = screen(
+            "📖 <b>Я читаю / слушаю</b>",
+            (
+                "Здесь пока пусто.\n\n"
+                "📗 Добавляйте книги на полку «Читаю» из избранного\n"
+                "🎧 Слушайте аудиокниги через /audiobook или карточку книги"
+            ),
+            breadcrumbs("🏠 Меню", "📖 Читаю"),
+        )
+        keyboard = [
+            [
+                InlineKeyboardButton("📖 Поиск книг", callback_data="menu_search"),
+                InlineKeyboardButton("🏠 Меню", callback_data="main_menu"),
+            ]
+        ]
+    else:
+        body_parts = []
+        kb = []
+
+        if reading_books:
+            body_parts.append("<b>📗 Читаю сейчас:</b>")
+            for i, book in enumerate(reading_books, 1):
+                title = truncate(escape_html(book["title"]), 35)
+                author = truncate(escape_html(book["author"]), 20)
+                body_parts.append(f"{i}. {title}\n     ✍️ {author}")
+                kb.append(
+                    [
+                        InlineKeyboardButton(
+                            f"📗 {truncate(book['title'], 30)}",
+                            callback_data=f"book_{book['book_id']}",
+                        ),
+                    ]
+                )
+
+        if audio_progress:
+            if reading_books:
+                body_parts.append("")
+            body_parts.append("<b>🎧 Слушаю:</b>")
+            for i, ap in enumerate(audio_progress, 1):
+                title = truncate(escape_html(ap["book_title"]), 35)
+                author = truncate(escape_html(ap["book_author"]), 20)
+                ch = ap["current_chapter"]
+                total = ap["total_chapters"]
+                progress_pct = round(ch / total * 100) if total > 0 else 0
+                bar = _progress_bar(ch, total)
+                body_parts.append(
+                    f"{i}. {title}\n"
+                    f"     ✍️ {author}\n"
+                    f"     {bar} {ch}/{total} глав ({progress_pct}%)"
+                )
+                kb.append(
+                    [
+                        InlineKeyboardButton(
+                            f"🎧 {truncate(ap['book_title'], 25)} ({ch}/{total})",
+                            callback_data=f"audio_continue_{ap['book_id']}",
+                        ),
+                    ]
+                )
+
+        text = screen(
+            "📖 <b>Я читаю / слушаю</b>",
+            "\n".join(body_parts),
+            breadcrumbs("🏠 Меню", "📖 Читаю"),
+        )
+        keyboard = kb
+        keyboard.append(
+            [
+                InlineKeyboardButton("◀️ Назад", callback_data="nav_back"),
+                InlineKeyboardButton("🏠 Меню", callback_data="main_menu"),
+            ]
+        )
+
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    if from_command:
+        await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=reply_markup)
+    else:
+        await safe_edit_or_send(update.callback_query, context, text, reply_markup)
+
+
+def _progress_bar(current: int, total: int, width: int = 10) -> str:
+    """Build a text-based progress bar."""
+    if total <= 0:
+        return "░" * width
+    filled = round(current / total * width)
+    return "▓" * filled + "░" * (width - filled)

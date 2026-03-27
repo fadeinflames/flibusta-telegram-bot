@@ -931,6 +931,37 @@ def get_audiobook_progress(user_id: str, book_id: str) -> dict | None:
         return dict(row) if row else None
 
 
+def get_all_user_audiobook_progress(user_id: str, limit: int = 10) -> list[dict]:
+    """Получить все аудиокниги пользователя с прогрессом."""
+    with get_db() as conn:
+        rows = conn.execute(
+            """
+            SELECT * FROM audiobook_progress
+            WHERE user_id = ?
+            ORDER BY updated_date DESC
+            LIMIT ?
+            """,
+            (user_id, limit),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_reading_books(user_id: str) -> list[dict]:
+    """Получить книги с полки 'Читаю' из избранного."""
+    with get_db() as conn:
+        rows = conn.execute(
+            """
+            SELECT book_id, title, author, added_date
+            FROM favorites
+            WHERE user_id = ? AND tags = 'reading'
+            ORDER BY added_date DESC
+            LIMIT 10
+            """,
+            (user_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
 # ──────────────────────────────────────────────────────────
 # RuTracker download queue
 # ──────────────────────────────────────────────────────────

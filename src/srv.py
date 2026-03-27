@@ -92,6 +92,13 @@ def main():
     app = ApplicationBuilder().token(token).request(request).build()
 
     # Запускаем фоновый загрузчик RuTracker
+    from src.rutracker_downloader import downloader as rt_downloader
+    from src.config import RUTRACKER_USERNAME
+    if RUTRACKER_USERNAME:
+        rt_downloader.start(app)
+        print("[ OK ] RuTracker downloader запущен")
+
+    # Запускаем фоновый загрузчик RuTracker
     rt_downloader.start(app)
     print("[ OK ] RuTracker downloader запущен")
 
