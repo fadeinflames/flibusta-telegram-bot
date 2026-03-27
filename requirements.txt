@@ -11,3 +11,7 @@ lxml>=4.9,<6
 
 # Logging
 json-log-formatter>=1.1,<2
+
+# Audiobooks (akniga.org)
+pycryptodome>=3.20,<4
+m3u8>=3.5,<4

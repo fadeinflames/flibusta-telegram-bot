@@ -144,6 +144,8 @@ def init_database():
 
         conn.commit()
 
+    init_audiobook_tables()
+
 
 # ────────────────────── Пользователи ──────────────────────
 
@@ -697,3 +699,143 @@ def cleanup_old_data(days: int = 30):
         )
 
         conn.commit()
+
+
+# ────────────────────── Аудиокниги (akniga.org) ──────────────────────
+
+
+def init_audiobook_tables():
+    """Создать таблицы для аудиокниг."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS audiobooks_cache (
+                book_id        TEXT PRIMARY KEY,
+                slug           TEXT UNIQUE,
+                title          TEXT,
+                author         TEXT,
+                narrator       TEXT,
+                cover_url      TEXT,
+                chapters_json  TEXT DEFAULT '[]',
+                total_chapters INTEGER DEFAULT 0,
+                cached_date    DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS audiobook_progress (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id         TEXT NOT NULL REFERENCES users(user_id),
+                book_id         TEXT NOT NULL,
+                book_title      TEXT,
+                book_author     TEXT,
+                current_chapter INTEGER DEFAULT 0,
+                total_chapters  INTEGER DEFAULT 0,
+                updated_date    DATETIME DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(user_id, book_id)
+            )
+        """)
+
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_audiobook_progress_user ON audiobook_progress(user_id)"
+        )
+
+        conn.commit()
+
+
+def save_audiobook_cache(
+    book_id: str, slug: str, title: str, author: str,
+    narrator: str, cover_url: str, chapters: list, total_chapters: int,
+):
+    """Сохранить или обновить кэш аудиокниги."""
+    with get_db() as conn:
+        conn.execute(
+            """
+            INSERT INTO audiobooks_cache
+                (book_id, slug, title, author, narrator, cover_url,
+                 chapters_json, total_chapters, cached_date)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(book_id) DO UPDATE SET
+                slug=excluded.slug, title=excluded.title,
+                author=excluded.author, narrator=excluded.narrator,
+                cover_url=excluded.cover_url, chapters_json=excluded.chapters_json,
+                total_chapters=excluded.total_chapters, cached_date=CURRENT_TIMESTAMP
+            """,
+            (book_id, slug, title, author, narrator, cover_url,
+             json.dumps(chapters, ensure_ascii=False), total_chapters),
+        )
+        conn.commit()
+
+
+def get_audiobook_cache(book_id: str) -> dict | None:
+    """Получить кэшированные данные аудиокниги по book_id."""
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT * FROM audiobooks_cache WHERE book_id = ?", (book_id,)
+        ).fetchone()
+        if not row:
+            return None
+        result = dict(row)
+        result["chapters"] = json.loads(result.get("chapters_json") or "[]")
+        return result
+
+
+def get_audiobook_cache_by_slug(slug: str) -> dict | None:
+    """Получить кэшированные данные аудиокниги по slug."""
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT * FROM audiobooks_cache WHERE slug = ?", (slug,)
+        ).fetchone()
+        if not row:
+            return None
+        result = dict(row)
+        result["chapters"] = json.loads(result.get("chapters_json") or "[]")
+        return result
+
+
+def upsert_audiobook_progress(
+    user_id: str, book_id: str, book_title: str,
+    book_author: str, current_chapter: int, total_chapters: int,
+):
+    """Создать или обновить прогресс прослушивания."""
+    with get_db() as conn:
+        conn.execute(
+            """
+            INSERT INTO audiobook_progress
+                (user_id, book_id, book_title, book_author,
+                 current_chapter, total_chapters, updated_date)
+            VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(user_id, book_id) DO UPDATE SET
+                current_chapter=excluded.current_chapter,
+                total_chapters=excluded.total_chapters,
+                updated_date=CURRENT_TIMESTAMP
+            """,
+            (user_id, book_id, book_title, book_author, current_chapter, total_chapters),
+        )
+        conn.commit()
+
+
+def get_user_listening_progress(user_id: str) -> dict | None:
+    """Получить последний прогресс прослушивания пользователя."""
+    with get_db() as conn:
+        row = conn.execute(
+            """
+            SELECT * FROM audiobook_progress
+            WHERE user_id = ?
+            ORDER BY updated_date DESC
+            LIMIT 1
+            """,
+            (user_id,),
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def get_audiobook_progress(user_id: str, book_id: str) -> dict | None:
+    """Получить прогресс прослушивания конкретной книги."""
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT * FROM audiobook_progress WHERE user_id = ? AND book_id = ?",
+            (user_id, book_id),
+        ).fetchone()
+        return dict(row) if row else None

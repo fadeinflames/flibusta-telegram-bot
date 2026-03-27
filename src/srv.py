@@ -41,6 +41,7 @@ from src.tg_bot import (
     start_callback,
     universal_search,
 )
+from src.tg_bot_audio import audiobook_search_command, listening_command
 
 
 def main():
@@ -90,6 +91,10 @@ def main():
     app.add_handler(CommandHandler("id", search_by_id))
     app.add_handler(CommandHandler("search", universal_search))
 
+    # ===== АУДИОКНИГИ =====
+    app.add_handler(CommandHandler("audiobook", audiobook_search_command))
+    app.add_handler(CommandHandler("listening", listening_command))
+
     # ===== ЛИЧНЫЙ КАБИНЕТ =====
     app.add_handler(CommandHandler("favorites", favorites_command))
     app.add_handler(CommandHandler("history", history_command))
@@ -123,6 +128,10 @@ def main():
     print("=" * 50)
     print("🤖 БОТ ЗАПУЩЕН И ГОТОВ К РАБОТЕ!")
     print("=" * 50)
+    print()
+    print("АУДИОКНИГИ (akniga.org):")
+    print("  /audiobook <запрос>  - поиск аудиокниг")
+    print("  /listening           - что сейчас слушаю")
     print()
     print("КОМАНДЫ ПОИСКА:")
     print("  /title <название>    - поиск по названию")

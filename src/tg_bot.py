@@ -20,6 +20,14 @@ from telegram.ext import CallbackContext
 from src import config, flib
 from src import database as db
 from src.custom_logging import get_logger
+from src.tg_bot_audio import (
+    handle_ab_auto,
+    handle_ab_back_results,
+    handle_ab_card,
+    handle_ab_ch,
+    handle_ab_list,
+    handle_ab_page,
+)
 from src.tg_bot_download import (  # noqa: F401
     get_book_by_format,
     quick_download,
@@ -466,6 +474,13 @@ _PREFIX_HANDLERS = [
     ("book_", _handle_book, True),
     ("show_favorites_", _handle_show_favorites, True),
     ("fav_book_", _handle_fav_book, True),
+    # Audiobooks (akniga.org)
+    ("ab_auto_", handle_ab_auto, False),
+    ("ab_card_", handle_ab_card, False),
+    ("ab_ch_", handle_ab_ch, False),
+    ("ab_list_", handle_ab_list, False),
+    ("ab_page_", handle_ab_page, True),
+    ("ab_back_results", handle_ab_back_results, False),
 ]
 
 
@@ -478,6 +493,10 @@ async def button(update: Update, context: CallbackContext) -> None:
     # ── Exact-match handlers ──
     if data == "current_page":
         await query.answer("Вы на этой странице")
+        return
+
+    if data == "ab_noop":
+        await query.answer()
         return
 
     if data == "page_jump":
