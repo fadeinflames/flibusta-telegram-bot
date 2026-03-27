@@ -114,6 +114,7 @@ async def handle_rt_auto(
     from src.tg_bot_helpers import book_from_cache
 
     book_id = data[len("rt_auto_"):]
+    logger.info("rt auto: user=%s book_id=%s", update.effective_user.id, book_id)
     await query.answer("🔍 Ищу на RuTracker…")
 
     book = await book_from_cache(book_id)
@@ -136,6 +137,7 @@ async def handle_rt_auto(
     )
 
     results = await _do_search(search_query, context)
+    logger.info("rt auto: query=%r results=%s", search_query, len(results))
     await msg.delete()
 
     if not results:
@@ -155,6 +157,7 @@ async def handle_rt_dl(
 ) -> None:
     """User clicked a search result — show chapter/file picker."""
     topic_id = data[len("rt_dl_"):]
+    logger.info("rt dl: user=%s topic=%s", update.effective_user.id, topic_id)
     await query.answer("Читаю список файлов…")
 
     # Find title from cached results
@@ -163,6 +166,7 @@ async def handle_rt_dl(
     title = next((t.title for t in results if t.topic_id == topic_id), f"Топик {topic_id}")
 
     files = await _do_topic_files(topic_id, context)
+    logger.info("rt dl: topic=%s files=%s", topic_id, len(files))
     if not files:
         await query.edit_message_text(
             "⚠️ Не удалось получить список аудиофайлов в торренте.\n"
@@ -202,6 +206,14 @@ async def handle_rt_pick(
         await query.edit_message_text("Файл не найден. Откройте список заново.")
         return
 
+    logger.info(
+        "rt pick: user=%s topic=%s file_index=%s filename=%s size=%s",
+        update.effective_user.id,
+        topic_id,
+        file_index,
+        selected.filename,
+        selected.size_bytes,
+    )
     task_id = downloader.enqueue(
         user_id=update.effective_user.id,
         chat_id=update.effective_chat.id,
@@ -314,7 +326,7 @@ async def _do_search(query: str, context: CallbackContext) -> list[rutracker.RTo
     try:
         return await loop.run_in_executor(None, rutracker.search, query)
     except Exception as exc:
-        logger.error("RuTracker search error: %s", exc)
+        logger.exception("RuTracker search error: query=%r", query)
         return []
 
 
@@ -325,5 +337,5 @@ async def _do_topic_files(topic_id: str, context: CallbackContext) -> list[rutra
     try:
         return await loop.run_in_executor(None, rutracker.get_topic_files, topic_id)
     except Exception as exc:
-        logger.error("RuTracker file list error: %s", exc)
+        logger.exception("RuTracker file list error: topic=%s", topic_id)
         return []

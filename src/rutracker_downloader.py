@@ -108,12 +108,22 @@ class RutrackerDownloader:
             topic_size=topic_size,
         )
         self._queue.put_nowait(task)
-        logger.info("Enqueued torrent download: topic=%s user=%s", topic_id, user_id)
+        logger.info(
+            "rt enqueue: task_id=%s user=%s chat=%s topic=%s file_index=%s filename=%s qsize=%s",
+            task_id,
+            user_id,
+            chat_id,
+            topic_id,
+            file_index,
+            filename,
+            self._queue.qsize(),
+        )
         return task_id
 
     async def _worker(self) -> None:
         while True:
             task = await self._queue.get()
+            logger.info("rt worker: picked task_id=%s topic=%s", task.task_id, task.topic_id)
             try:
                 await self._process(task)
             except Exception as exc:
@@ -126,7 +136,13 @@ class RutrackerDownloader:
     async def _process(self, task: DownloadTask) -> None:
         started_at = time.time()
         db.rt_update_status(task.task_id, "downloading")
-        logger.info("Downloading torrent topic=%s", task.topic_id)
+        logger.info(
+            "rt process: start task_id=%s topic=%s file_index=%s filename=%s",
+            task.task_id,
+            task.topic_id,
+            task.file_index,
+            task.filename,
+        )
         status_message = await self._notify(
             task.chat_id,
             "🚀 <b>Задача запущена</b>\n"
@@ -141,6 +157,7 @@ class RutrackerDownloader:
         torrent_bytes = await asyncio.get_event_loop().run_in_executor(
             None, rutracker.download_torrent, task.topic_id
         )
+        logger.info("rt process: downloaded torrent bytes=%s task_id=%s", len(torrent_bytes), task.task_id)
 
         # Save torrent file to temp
         dest_dir = Path(RUTRACKER_DOWNLOAD_DIR) / task.topic_id
@@ -161,6 +178,7 @@ class RutrackerDownloader:
         torrent_path.unlink(missing_ok=True)
 
         if not ok:
+            logger.error("rt process: aria2c failed task_id=%s topic=%s", task.task_id, task.topic_id)
             raise RuntimeError("aria2c exited with non-zero code")
 
         # Collect audio files (sorted by filename -> chapter order for numbered tracks)
@@ -176,6 +194,7 @@ class RutrackerDownloader:
                 # Fallback: if exact name is missing, send just one file, never a batch.
                 audio_files = audio_files[:1]
         if not audio_files:
+            logger.error("rt process: no audio files after download task_id=%s topic=%s", task.task_id, task.topic_id)
             raise RuntimeError("No audio files found after download")
 
         db.rt_update_status(task.task_id, "done")
@@ -202,16 +221,36 @@ class RutrackerDownloader:
         count = len(audio_files)
         await self._notify(task.chat_id, f"✅ <b>{task.title}</b>\n\nСкачалось {count} файл(ов). Отправляю по порядку...")
         for idx, fpath in enumerate(audio_files, 1):
+            logger.info("rt send: task_id=%s file=%s idx=%s/%s", task.task_id, fpath.name, idx, count)
             send_path = fpath
             size_mb = send_path.stat().st_size / 1024 / 1024
             if size_mb > 49:
+                logger.warning(
+                    "rt send: file too big task_id=%s file=%s size_mb=%.2f; try recompress",
+                    task.task_id,
+                    fpath.name,
+                    size_mb,
+                )
                 recompressed = await asyncio.get_event_loop().run_in_executor(
                     None, _compress_for_telegram, str(fpath)
                 )
                 if recompressed:
                     send_path = Path(recompressed)
                     size_mb = send_path.stat().st_size / 1024 / 1024
+                    logger.info(
+                        "rt send: recompress ok task_id=%s file=%s new_file=%s size_mb=%.2f",
+                        task.task_id,
+                        fpath.name,
+                        send_path.name,
+                        size_mb,
+                    )
                 if size_mb > 49:
+                    logger.error(
+                        "rt send: still too big task_id=%s file=%s size_mb=%.2f",
+                        task.task_id,
+                        send_path.name,
+                        size_mb,
+                    )
                     await self._notify(
                         task.chat_id,
                         f"⚠️ Файл {fpath.name} слишком большой ({size_mb:.0f} МБ), не удалось ужать до лимита",
@@ -235,6 +274,7 @@ class RutrackerDownloader:
 
         # Cleanup
         shutil.rmtree(str(dest_dir_for_cleanup(task.topic_id)), ignore_errors=True)
+        logger.info("rt cleanup: task_id=%s topic=%s", task.task_id, task.topic_id)
 
     async def _notify(self, chat_id: int, text: str):
         if self._app is None:
@@ -302,6 +342,8 @@ class RutrackerDownloader:
             if not line:
                 break
             text = line.decode("utf-8", errors="ignore").strip()
+            if text:
+                logger.debug("aria2c out task_id=%s: %s", task.task_id, text)
             match = progress_re.search(text)
             if not match:
                 continue
@@ -322,7 +364,9 @@ class RutrackerDownloader:
                 last_emit_ts = now
                 last_percent = percent
 
-        return await proc.wait() == 0
+        rc = await proc.wait()
+        logger.info("aria2c finished: task_id=%s rc=%s", task.task_id, rc)
+        return rc == 0
 
 
 def dest_dir_for_cleanup(topic_id: str) -> Path:
@@ -352,7 +396,9 @@ def _compress_for_telegram(path: str) -> str | None:
     ]
     result = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=1800)
     if result.returncode != 0 or not out.exists():
+        logger.error("ffmpeg recompress failed: src=%s rc=%s", path, result.returncode)
         return None
+    logger.info("ffmpeg recompress success: src=%s out=%s", path, out)
     return str(out)
 
 

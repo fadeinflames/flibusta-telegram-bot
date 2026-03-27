@@ -18,11 +18,11 @@ RUN pip install --no-cache-dir --timeout 300 --retries 5 \
     && pip install --no-cache-dir --timeout 300 --retries 5 -r requirements.txt
 
 # Директории для данных
-RUN mkdir -p /srv/books /srv/logs /srv/data
+RUN mkdir -p /srv/books /srv/logs /srv/data /srv/downloads
 
 # Исходный код
 COPY src ./src
 
-VOLUME ["/srv/books", "/srv/logs", "/srv/data"]
+VOLUME ["/srv/books", "/srv/logs", "/srv/data", "/srv/downloads"]
 
 CMD ["python", "src/srv.py"]

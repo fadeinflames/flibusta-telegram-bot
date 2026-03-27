@@ -13,6 +13,7 @@ services:
       - ./books:/srv/books
       - ./logs:/srv/logs
       - ./data:/srv/data
+      - ./downloads:/srv/downloads
       # Раскомментируйте для hot-reload при разработке:
       # - ./src:/srv/src
     healthcheck:
