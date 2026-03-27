@@ -113,7 +113,7 @@ def _results_text(results: list[rutracker.RTopic], query: str, page: int) -> str
     start = (page - 1) * _PAGE_SIZE
     chunk = results[start : start + _PAGE_SIZE]
 
-    lines = [f"<b>🎧 RuTracker</b> — «{query}» ({total} результ., по убыв. пиров)\n"]
+    lines = [f"<b>🎧 Аудиокниги</b> — «{query}» ({total} результ., по убыв. пиров)\n"]
     for i, t in enumerate(chunk, start + 1):
         swarm = t.seeds + t.leeches
         seeds_icon = "🟢" if swarm >= 10 else ("🟡" if swarm >= 3 else "🔴")
@@ -176,17 +176,17 @@ async def _show_rt_results(
 async def handle_rt_auto(
     data: str, query, update: Update, context: CallbackContext
 ) -> None:
-    """Search RuTracker by book title (called from Flibusta book card button)."""
+    """Поиск аудио по названию книги (кнопка с карточки Flibusta)."""
     import re
     from src.tg_bot_helpers import book_from_cache
 
     if not RUTRACKER_USERNAME:
-        await query.answer("RuTracker не настроен в .env", show_alert=True)
+        await query.answer("Аудиозагрузки не настроены (.env)", show_alert=True)
         return
 
     book_id = data[len("rt_auto_"):]
     logger.info("rt auto: user=%s book_id=%s", update.effective_user.id, book_id)
-    await query.answer("🔍 Ищу на RuTracker…")
+    await query.answer("🔍 Ищу аудиокниги…")
 
     book = await book_from_cache(book_id)
     if not book:
@@ -204,7 +204,7 @@ async def handle_rt_auto(
 
     msg = await context.bot.send_message(
         update.effective_chat.id,
-        f"🔍 Ищу на RuTracker: <b>{search_query}</b>…",
+        f"🔍 Ищу аудиокниги: <b>{search_query}</b>…",
         parse_mode=ParseMode.HTML,
     )
 
@@ -215,7 +215,7 @@ async def handle_rt_auto(
     if not results:
         await context.bot.send_message(
             update.effective_chat.id,
-            f"😔 На RuTracker ничего не нашлось по запросу «{search_query}».\n"
+            f"😔 Ничего не нашлось по запросу «{search_query}».\n"
             "Попробуйте другой запрос или <code>/audiobook …</code> вручную.",
             parse_mode=ParseMode.HTML,
         )
@@ -272,7 +272,7 @@ async def handle_rt_pick(
     await query.answer("Добавляю в очередь…")
     cached = context.user_data.get(_RT_FILES_KEY, {})
     topic_id = cached.get("topic_id")
-    title = cached.get("title", "RuTracker")
+    title = cached.get("title", "Аудиораздача")
     files: list[rutracker.FileEntry] = cached.get("files", [])
     if not topic_id or not files:
         await query.edit_message_text("Результаты устарели. Откройте список заново.")
@@ -381,7 +381,7 @@ async def handle_rt_page(
 async def _show_rt_topic_files(update: Update, context: CallbackContext, page: int, edit: bool = False) -> None:
     cached = context.user_data.get(_RT_FILES_KEY, {})
     topic_id = cached.get("topic_id")
-    title = cached.get("title", "RuTracker")
+    title = cached.get("title", "Аудиораздача")
     files: list[rutracker.FileEntry] = cached.get("files", [])
     description = (cached.get("description") or "").strip()
     forum_name = (cached.get("forum_name") or "").strip()
@@ -403,7 +403,7 @@ async def _show_rt_topic_files(update: Update, context: CallbackContext, page: i
     if forum_name:
         lines.append(f"📂 <i>{escape_html(forum_name)}</i>")
     if topic_url:
-        lines.append(f'🔗 <a href="{escape_html(topic_url)}">Открыть раздачу на RuTracker</a>')
+        lines.append(f'🔗 <a href="{escape_html(topic_url)}">Открыть страницу раздачи</a>')
     lines.append("")
     if page == 0 and description:
         # Подробное описание — только на первой странице (урезаем при нехватке места)
@@ -448,7 +448,7 @@ async def _show_rt_topic_files(update: Update, context: CallbackContext, page: i
             if forum_name:
                 lines.append(f"📂 <i>{escape_html(forum_name)}</i>")
             if topic_url:
-                lines.append(f'🔗 <a href="{escape_html(topic_url)}">Открыть раздачу на RuTracker</a>')
+                lines.append(f'🔗 <a href="{escape_html(topic_url)}">Открыть страницу раздачи</a>')
             lines.extend(["", "📝 <b>Описание раздачи</b>", f"<i>{desc_short}</i>", ""])
             lines.extend(
                 [
@@ -464,7 +464,7 @@ async def _show_rt_topic_files(update: Update, context: CallbackContext, page: i
             text = text[: _TG_MSG_MAX - 4] + "…"
 
     if topic_url:
-        rows.append([InlineKeyboardButton("🌐 Раздача на RuTracker", url=topic_url)])
+        rows.append([InlineKeyboardButton("🌐 Страница раздачи", url=topic_url)])
 
     kb = InlineKeyboardMarkup(rows)
     if edit and update.callback_query:
@@ -526,10 +526,10 @@ async def _do_topic_files(topic_id: str, context: CallbackContext) -> list[rutra
 
 @check_access
 async def audiobook_search_command(update: Update, context: CallbackContext) -> None:
-    """Поиск аудиокниг на RuTracker."""
+    """Поиск аудиокниг."""
     if not RUTRACKER_USERNAME:
         await update.message.reply_text(
-            "⚠️ RuTracker не настроен: задайте <code>RUTRACKER_USERNAME</code> и "
+            "⚠️ Аудиозагрузки не настроены: задайте <code>RUTRACKER_USERNAME</code> и "
             "<code>RUTRACKER_PASSWORD</code> в .env",
             parse_mode=ParseMode.HTML,
         )
@@ -538,7 +538,7 @@ async def audiobook_search_command(update: Update, context: CallbackContext) -> 
     query = " ".join(context.args).strip() if context.args else ""
     if not query:
         await update.message.reply_text(
-            "🎧 <b>Поиск аудиокниг на RuTracker</b>\n\n"
+            "🎧 <b>Поиск аудиокниг</b>\n\n"
             "Использование: <code>/audiobook Название или автор</code>\n\n"
             "Пример: <code>/audiobook Достоевский</code>",
             parse_mode=ParseMode.HTML,
@@ -546,9 +546,9 @@ async def audiobook_search_command(update: Update, context: CallbackContext) -> 
         return
 
     user_id = update.effective_user.id
-    logger.info("audiobook (RuTracker) search user=%s query=%r", user_id, query)
+    logger.info("audiobook search user=%s query=%r", user_id, query)
 
-    msg = await update.message.reply_text("⏳ Ищу на RuTracker…")
+    msg = await update.message.reply_text("⏳ Ищу…")
     results = await _do_search(query, context)
     try:
         await msg.delete()
@@ -557,7 +557,7 @@ async def audiobook_search_command(update: Update, context: CallbackContext) -> 
 
     if not results:
         await update.message.reply_text(
-            f"😔 На RuTracker ничего не найдено по запросу «{escape_html(query)}».\n"
+            f"😔 Ничего не найдено по запросу «{escape_html(query)}».\n"
             "Попробуйте другие слова.",
             parse_mode=ParseMode.HTML,
         )

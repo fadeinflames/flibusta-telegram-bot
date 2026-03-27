@@ -485,7 +485,7 @@ async def show_main_menu(update: Update, context: CallbackContext):
 
 
 async def show_now_reading(update: Update, context: CallbackContext, *, edit: bool = False) -> None:
-    """Экран «Я читаю / слушаю»: полка «Читаю», прогресс RuTracker, очередь загрузок."""
+    """Экран «Я читаю / слушаю»: полка «Читаю», прогресс по аудио, очередь загрузок."""
     user_id = update.effective_user.id
     user_id_s = str(user_id)
     reading_books = await db_call(db.get_reading_books, user_id_s)
@@ -512,7 +512,7 @@ async def show_now_reading(update: Update, context: CallbackContext, *, edit: bo
         body_lines.append("")
 
     if rows:
-        body_lines.append("<b>Аудиокниги (RuTracker)</b>")
+        body_lines.append("<b>Аудиокниги</b>")
         for r in rows:
             title = escape_html((r.get("title") or "Без названия")[:100])
             cur = int(r.get("current_chapter") or 0)
@@ -529,7 +529,7 @@ async def show_now_reading(update: Update, context: CallbackContext, *, edit: bo
     elif not reading_books:
         body_lines.append(
             "Пока нет сохранённого прогресса по аудио.\n"
-            "Выберите файл в раздаче RuTracker — бот запомнит главу."
+            "Выберите файл в раздаче — бот запомнит главу."
         )
 
     if pending:

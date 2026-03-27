@@ -277,7 +277,7 @@ async def list_allowed_users(update: Update, _: CallbackContext) -> None:
 @check_access
 @admin_only
 async def rt_admin_queue(update: Update, context: CallbackContext) -> None:
-    """/rtqueue — RuTracker queue monitor (admin only)."""
+    """/rtqueue — очередь загрузок аудио (admin only)."""
     # Optional argument: /rtqueue 50
     limit = 20
     if context.args:
@@ -288,7 +288,7 @@ async def rt_admin_queue(update: Update, context: CallbackContext) -> None:
 
     tasks = await db_call(db.rt_recent_tasks, limit)
     if not tasks:
-        await update.message.reply_text("📭 Очередь RuTracker пока пуста.")
+        await update.message.reply_text("📭 Очередь загрузок аудио пока пуста.")
         return
 
     icon = {
@@ -298,7 +298,7 @@ async def rt_admin_queue(update: Update, context: CallbackContext) -> None:
         "failed": "❌",
         "cancelled": "⏹️",
     }
-    lines = [f"🎧 <b>RuTracker очередь (последние {len(tasks)})</b>", ""]
+    lines = [f"🎧 <b>Очередь загрузок аудио (последние {len(tasks)})</b>", ""]
     for t in tasks:
         st = t.get("status", "pending")
         st_i = icon.get(st, "⚪")
@@ -326,7 +326,7 @@ async def rt_admin_queue(update: Update, context: CallbackContext) -> None:
 @check_access
 @admin_only
 async def rt_admin_delete_all(update: Update, context: CallbackContext) -> None:
-    """/rtdelall — очистить всю очередь RuTracker и файлы (admin only)."""
+    """/rtdelall — очистить всю очередь загрузок аудио и файлы (admin only)."""
     ok, msg = rt_downloader.delete_all_tasks()
     await update.message.reply_text(f"{'✅' if ok else '❌'} {msg}")
 
@@ -334,7 +334,7 @@ async def rt_admin_delete_all(update: Update, context: CallbackContext) -> None:
 @check_access
 @admin_only
 async def rt_admin_stop(update: Update, context: CallbackContext) -> None:
-    """/rtstop <id> — отменить задачу RuTracker (admin only)."""
+    """/rtstop <id> — отменить задачу загрузки аудио (admin only)."""
     if not context.args:
         await update.message.reply_text(
             "Использование: <code>/rtstop &lt;id&gt;</code>\n"
@@ -587,7 +587,7 @@ _PREFIX_HANDLERS = [
     ("book_", _handle_book, True),
     ("show_favorites_", _handle_show_favorites, True),
     ("fav_book_", _handle_fav_book, True),
-    # Аудиокниги (RuTracker)
+    # Аудиокниги (внешний источник)
     ("rt_auto_", handle_rt_auto, False),
     ("rt_dl_", handle_rt_dl, False),
     ("rt_pick_", handle_rt_pick, False),

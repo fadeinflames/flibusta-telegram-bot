@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Optional
 
 import requests
@@ -344,4 +345,31 @@ def get_topic_files(topic_id: str) -> list[FileEntry]:
         lower = e.filename.lower()
         if any(lower.endswith(ext) for ext in _AUDIO_EXTENSIONS):
             audio_only.append(e)
+    # Торрент часто отдаёт файлы не по порядку глав — сортируем по номеру в имени
+    audio_only.sort(key=lambda e: _audio_sort_key(e.filename))
     return audio_only
+
+
+def _audio_sort_key(filename: str) -> tuple:
+    """Ключ сортировки: номер главы/части из имени файла, затем имя."""
+    tail = Path(filename.replace("\\", "/")).name
+    stem = Path(tail).stem
+    m = re.search(r"(?i)глава\s*[:#]?\s*(\d+)", stem)
+    if m:
+        return (0, int(m.group(1)), stem.lower())
+    m = re.search(r"(?i)часть\s*[:#]?\s*(\d+)", stem)
+    if m:
+        return (0, int(m.group(1)), stem.lower())
+    m = re.search(r"(?i)(?:cd|диск)\s*0*(\d+)", stem)
+    if m:
+        return (0, int(m.group(1)), stem.lower())
+    m = re.search(r"(?i)track\s*0*(\d+)", stem)
+    if m:
+        return (0, int(m.group(1)), stem.lower())
+    m = re.search(r"(?i)chapter\s*0*(\d+)", stem)
+    if m:
+        return (0, int(m.group(1)), stem.lower())
+    m = re.match(r"^0*(\d+)", stem)
+    if m:
+        return (0, int(m.group(1)), stem.lower())
+    return (1, 0, stem.lower())

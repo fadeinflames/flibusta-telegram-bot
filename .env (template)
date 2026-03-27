@@ -1,6 +1,6 @@
 TOKEN='0123456789:abracadabra'
 
-# RuTracker (аудиокниги)
+# Аудиокниги (логин внешнего источника торрентов)
 RUTRACKER_USERNAME=''
 RUTRACKER_PASSWORD=''
 # RUTRACKER_DOWNLOAD_DIR='/srv/downloads'  # по умолчанию ./downloads рядом с проектом

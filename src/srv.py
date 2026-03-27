@@ -58,7 +58,7 @@ def main():
     # Reset downloads stuck in 'downloading' state from previous run
     stuck = db.rt_reset_stuck_downloads()
     if stuck:
-        print(f"[ OK ] Сброшено {stuck} зависших загрузок RuTracker")
+        print(f"[ OK ] Сброшено {stuck} зависших загрузок аудио")
 
     # Получаем токен
     token = os.getenv("TOKEN")
@@ -91,9 +91,9 @@ def main():
     # Создаем приложение с настроенным request
     app = ApplicationBuilder().token(token).request(request).build()
 
-    # Фоновый загрузчик RuTracker
+    # Фоновый загрузчик аудио
     rt_downloader.start(app)
-    print("[ OK ] RuTracker downloader запущен")
+    print("[ OK ] Загрузчик аудио запущен")
 
     # ===== ОСНОВНЫЕ КОМАНДЫ =====
     app.add_handler(CommandHandler("start", start_callback))
@@ -150,8 +150,8 @@ def main():
     print("🤖 БОТ ЗАПУЩЕН И ГОТОВ К РАБОТЕ!")
     print("=" * 50)
     print()
-    print("АУДИОКНИГИ (RuTracker):")
-    print("  /audiobook <запрос>  - поиск аудиокниг на RuTracker")
+    print("АУДИОКНИГИ:")
+    print("  /audiobook <запрос>  - поиск аудиокниг")
     print("  /listening, /now     - что читаю / слушаю (прогресс + очередь)")
     print()
     print("КОМАНДЫ ПОИСКА:")
@@ -175,10 +175,10 @@ def main():
     print("АДМИН:")
     print("  /users               - список пользователей")
     print("  /stats               - общая статистика")
-    print("  /rtqueue [N]         - очередь RuTracker")
-    print("  /rtstop <id>         - отменить задачу RuTracker")
+    print("  /rtqueue [N]         - очередь загрузок аудио")
+    print("  /rtstop <id>         - отменить задачу загрузки")
     print("  /rtdel <id>          - удалить задачу и файлы на диске")
-    print("  /rtdelall            - очистить всю очередь RuTracker")
+    print("  /rtdelall            - очистить всю очередь загрузок")
     print()
     print("Подсказка: начните с команды /start")
     print("=" * 50)
