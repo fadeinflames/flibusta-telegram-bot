@@ -48,6 +48,7 @@ class DownloadTask:
     topic_size: str = ""
     reading_chapter_pos: int = 0
     created_at: float = field(default_factory=time.time)
+    from_cache: bool = False
 
 
 class RutrackerDownloader:
@@ -116,6 +117,7 @@ class RutrackerDownloader:
             leeches=leeches,
             topic_size=topic_size,
             reading_chapter_pos=reading_chapter_pos,
+            from_cache=False,
         )
         self._queue.put_nowait(task)
         logger.info(
@@ -231,6 +233,32 @@ class RutrackerDownloader:
 
         started_at = time.time()
         db.rt_update_status(task.task_id, "downloading")
+        dest_dir = Path(RUTRACKER_DOWNLOAD_DIR) / task.topic_id
+        dest_dir.mkdir(parents=True, exist_ok=True)
+
+        # Уже скачанная глава (переход пред/след или повтор) — без торрента и aria2
+        if task.file_index is not None and task.filename:
+            cached = _find_resolved_audio_path(dest_dir, task.filename)
+            if cached and _file_size_ready(cached, task.file_size):
+                task.from_cache = True
+                logger.info(
+                    "rt process: cache hit task_id=%s topic=%s file=%s",
+                    task.task_id,
+                    task.topic_id,
+                    cached,
+                )
+                db.rt_update_status(task.task_id, "done")
+                await self._notify(
+                    task.chat_id,
+                    "📦 <b>Из кэша на диске</b>\n"
+                    f"«{html.escape(task.title)}»\n"
+                    f"<code>{html.escape(Path(task.filename).name)}</code>\n"
+                    "Отправляю в Telegram…",
+                )
+                await self._send_audio_files(task, [cached])
+                return
+
+        task.from_cache = False
         logger.info(
             "rt process: start task_id=%s topic=%s file_index=%s filename=%s",
             task.task_id,
@@ -254,11 +282,7 @@ class RutrackerDownloader:
         )
         logger.info("rt process: downloaded torrent bytes=%s task_id=%s", len(torrent_bytes), task.task_id)
 
-        # Save torrent file to temp
-        dest_dir = Path(RUTRACKER_DOWNLOAD_DIR) / task.topic_id
-        # Ensure we don't mix files from previous attempts for this topic.
-        shutil.rmtree(dest_dir, ignore_errors=True)
-        dest_dir.mkdir(parents=True, exist_ok=True)
+        # Не очищаем dest_dir: в нём могут лежать уже скачанные главы этой раздачи
 
         torrent_path = dest_dir / f"{task.topic_id}.torrent"
         torrent_path.write_bytes(torrent_bytes)
@@ -334,7 +358,11 @@ class RutrackerDownloader:
         bot = self._app.bot
         count = len(audio_files)
         sent_ok = False
-        await self._notify(task.chat_id, f"✅ <b>{task.title}</b>\n\nСкачалось {count} файл(ов). Отправляю по порядку...")
+        if not task.from_cache:
+            await self._notify(
+                task.chat_id,
+                f"✅ <b>{task.title}</b>\n\nСкачалось {count} файл(ов). Отправляю по порядку…",
+            )
         for idx, fpath in enumerate(audio_files, 1):
             logger.info("rt send: task_id=%s file=%s idx=%s/%s", task.task_id, fpath.name, idx, count)
             send_path = fpath
@@ -394,9 +422,8 @@ class RutrackerDownloader:
             if row and row.get("total_chapters", 0) > 1:
                 await self._send_chapter_nav_message(task.chat_id, task.topic_id, task.title, row)
 
-        # Cleanup
-        shutil.rmtree(str(dest_dir_for_cleanup(task.topic_id)), ignore_errors=True)
-        logger.info("rt cleanup: task_id=%s topic=%s", task.task_id, task.topic_id)
+        # Файлы раздачи оставляем на диске — соседние главы можно взять из кэша без повторной загрузки
+        logger.info("rt send done: task_id=%s topic=%s (кэш на диске сохранён)", task.task_id, task.topic_id)
 
     async def _send_chapter_nav_message(
         self,
@@ -557,6 +584,8 @@ class RutrackerDownloader:
         tpath = Path(torrent_path)
         dpath = Path(dest_dir)
 
+        # --seed-time=0: после докачки не сидировать, процесс завершается (только качаем, не раздаём дальше).
+        # Пока идёт загрузка, по протоколу BitTorrent обмен кусками с пирами неизбежен — это не «раздача файла целиком».
         cmd = [
             aria2c,
             "--dir",
@@ -624,6 +653,35 @@ class RutrackerDownloader:
 
 def dest_dir_for_cleanup(topic_id: str) -> Path:
     return Path(RUTRACKER_DOWNLOAD_DIR) / topic_id
+
+
+def _find_resolved_audio_path(dest_dir: Path, filename: str) -> Path | None:
+    """Существующий аудиофайл под *dest_dir* с тем же basename, что в *filename* (путь в торренте)."""
+    if not dest_dir.is_dir():
+        return None
+    target = Path(filename).name.lower()
+    for p in dest_dir.rglob("*"):
+        if not p.is_file():
+            continue
+        if p.suffix.lower() not in AUDIO_EXTENSIONS:
+            continue
+        if p.name.lower() == target:
+            return p
+    return None
+
+
+def _file_size_ready(path: Path, expected: int) -> bool:
+    """Файл похож на полностью скачанный (размер совпадает с ожидаемым или размер неизвестен)."""
+    try:
+        st = path.stat().st_size
+    except OSError:
+        return False
+    if st <= 0:
+        return False
+    if expected <= 0:
+        return st >= 1024
+    diff = abs(st - expected)
+    return diff <= max(4096, expected // 100)
 
 
 def _dir_bytes_excluding_torrent(root: Path, torrent_path: Path) -> int:

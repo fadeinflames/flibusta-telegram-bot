@@ -642,7 +642,7 @@ async def handle_rt_audio_prev(
     tot = int(row["total_chapters"])
     await context.bot.send_message(
         update.effective_chat.id,
-        f"⏳ Предыдущая глава ({new_idx + 1}/{tot}) — загружаю…",
+        f"⏳ Предыдущая глава ({new_idx + 1}/{tot}) — загружаю или отправляю из кэша…",
     )
 
 
@@ -667,7 +667,7 @@ async def handle_rt_audio_next(
     await query.answer("В очереди")
     await context.bot.send_message(
         update.effective_chat.id,
-        f"⏳ Следующая глава ({new_idx + 1}/{tot}) — загружаю…",
+        f"⏳ Следующая глава ({new_idx + 1}/{tot}) — загружаю или отправляю из кэша…",
     )
 
 
@@ -694,5 +694,5 @@ async def handle_reading_go(
     tot = int(row["total_chapters"])
     await context.bot.send_message(
         update.effective_chat.id,
-        f"⏳ Продолжаю с файла {ch + 1}/{tot} — загружаю…",
+        f"⏳ Продолжаю с файла {ch + 1}/{tot} — загружаю или отправляю из кэша…",
     )
