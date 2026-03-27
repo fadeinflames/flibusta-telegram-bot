@@ -106,17 +106,23 @@ async def quick_download(book_id: str, update: Update, context: CallbackContext)
             if default_fmt in fmt_key.lower():
                 selected = fmt_key
                 break
+        format_substituted = False
         if not selected:
             selected = next(iter(book.formats))
+            format_substituted = True
 
         b_content, b_filename = await flib_call(flib.download_book, book, selected)
         if b_content and b_filename:
             await db_call(db.add_download, user_id, book_id, book.title, book.author, selected)
+            caption = f"✅ {book.title}\n✍️ {book.author}"
+            if format_substituted:
+                actual_fmt = selected.strip("() ").upper()
+                caption += f"\n\nℹ️ Формат {default_fmt.upper()} недоступен, скачан {actual_fmt}"
             await context.bot.send_document(
                 chat_id=update.effective_chat.id,
                 document=b_content,
                 filename=b_filename,
-                caption=f"✅ {book.title}\n✍️ {book.author}",
+                caption=caption,
             )
             await context.bot.delete_message(chat_id=mes.chat_id, message_id=mes.message_id)
         else:

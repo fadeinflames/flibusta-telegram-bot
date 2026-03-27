@@ -2,6 +2,7 @@ import json
 import os
 import sqlite3
 import threading
+import time
 from contextlib import contextmanager
 
 from src import config
@@ -260,6 +261,42 @@ def get_user_search_history(user_id: str, limit: int = 10) -> list[dict]:
             (user_id, limit),
         )
         return [dict(row) for row in cursor.fetchall()]
+
+
+def get_user_search_history_paginated(user_id: str, offset: int = 0, limit: int = 15) -> tuple[list[dict], int]:
+    """Получить историю поиска с пагинацией."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) as total FROM search_history WHERE user_id = ?", (user_id,))
+        total = cursor.fetchone()["total"]
+        cursor.execute(
+            """
+            SELECT * FROM search_history
+            WHERE user_id = ?
+            ORDER BY timestamp DESC, id DESC
+            LIMIT ? OFFSET ?
+        """,
+            (user_id, limit, offset),
+        )
+        return [dict(row) for row in cursor.fetchall()], total
+
+
+def clear_search_history(user_id: str) -> int:
+    """Очистить историю поиска пользователя. Возвращает количество удалённых записей."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM search_history WHERE user_id = ?", (user_id,))
+        conn.commit()
+        return cursor.rowcount
+
+
+def clear_download_history(user_id: str) -> int:
+    """Очистить историю скачиваний пользователя. Возвращает количество удалённых записей."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM downloads WHERE user_id = ?", (user_id,))
+        conn.commit()
+        return cursor.rowcount
 
 
 def get_last_search(user_id: str) -> dict | None:
@@ -676,8 +713,8 @@ def get_user_stats(user_id: str) -> dict:
 # ────────────────────── Очистка ──────────────────────
 
 
-def cleanup_old_data(days: int = 30):
-    """Очистить старые данные."""
+def cleanup_old_data(days: int = 30, max_cache_size: int = 10000):
+    """Очистить старые данные и ограничить размер кэша книг."""
     with get_db() as conn:
         cursor = conn.cursor()
 
@@ -698,7 +735,34 @@ def cleanup_old_data(days: int = 30):
             (str(days),),
         )
 
+        # Enforce max cache size — keep most accessed entries
+        cursor.execute("SELECT COUNT(*) as cnt FROM books_cache")
+        cache_count = cursor.fetchone()["cnt"]
+        if cache_count > max_cache_size:
+            cursor.execute(
+                """
+                DELETE FROM books_cache WHERE book_id IN (
+                    SELECT book_id FROM books_cache
+                    ORDER BY access_count ASC, cached_date ASC
+                    LIMIT ?
+                )
+            """,
+                (cache_count - max_cache_size,),
+            )
+
         conn.commit()
+
+
+def rt_reset_stuck_downloads():
+    """Reset tasks stuck in 'downloading' status back to 'pending' (call on startup)."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE rt_download_queue SET status = 'pending' WHERE status = 'downloading'"
+        )
+        count = cursor.rowcount
+        conn.commit()
+        return count
 
 
 # ────────────────────── Кэш аудиокниг (legacy, для старых данных) ──────────────────────
@@ -871,9 +935,6 @@ def get_audiobook_progress(user_id: str, book_id: str) -> dict | None:
 # RuTracker download queue
 # ──────────────────────────────────────────────────────────
 
-import time as _time
-
-
 def rt_enqueue(
     user_id: int,
     chat_id: int,
@@ -889,7 +950,7 @@ def rt_enqueue(
             """INSERT INTO rt_download_queue
                (user_id, chat_id, topic_id, title, file_index, filename, file_size, status, created_at)
                VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)""",
-            (str(user_id), chat_id, topic_id, title, file_index, filename, file_size, _time.time()),
+            (str(user_id), chat_id, topic_id, title, file_index, filename, file_size, time.time()),
         )
         conn.commit()
         return cur.lastrowid

@@ -183,6 +183,8 @@ async def show_book_details_with_favorite(book_id: str, update: Update, context:
     detail_bits = []
     if book.year:
         detail_bits.append(f"📅 {book.year}")
+    if book.rating:
+        detail_bits.append(f"⭐ {book.rating}")
     if book.size:
         detail_bits.append(f"📊 {book.size}")
     if book.formats:
@@ -516,19 +518,25 @@ async def show_search_menu(update: Update, context: CallbackContext):
 # ════════════════════════════════════════════════════════════
 
 
-async def show_user_history(update: Update, context: CallbackContext, *, from_command: bool = False):
-    """Search history screen (works as both command response and callback edit)."""
-    user_id = str(update.effective_user.id)
-    history = await db_call(db.get_user_search_history, user_id, limit=15)
+HISTORY_PER_PAGE = 15
 
-    if not history:
+
+async def show_user_history(update: Update, context: CallbackContext, *, from_command: bool = False, page: int = 1):
+    """Search history screen with pagination and clear button."""
+    user_id = str(update.effective_user.id)
+    offset = (page - 1) * HISTORY_PER_PAGE
+    history, total = await db_call(db.get_user_search_history_paginated, user_id, offset, HISTORY_PER_PAGE)
+    total_pages = math.ceil(total / HISTORY_PER_PAGE) if total > 0 else 1
+
+    if not history and total == 0:
         text = screen(
             "📜 <b>История поиска</b>",
             "История пуста\n\nНачните поиск с команд:\n• /title\n• /author\n• /exact",
             breadcrumbs("🏠 Меню", "📜 История"),
         )
     else:
-        text = screen("📜 <b>История поиска (последние 15)</b>", "", breadcrumbs("🏠 Меню", "📜 История")) + "\n\n"
+        page_info = f"  •  стр. {page}/{total_pages}" if total_pages > 1 else ""
+        text = screen(f"📜 <b>История поиска ({total} записей{page_info})</b>", "", breadcrumbs("🏠 Меню", "📜 История")) + "\n\n"
         for item in history:
             timestamp = item["timestamp"][:16]
             command = item["command"]
@@ -537,12 +545,28 @@ async def show_user_history(update: Update, context: CallbackContext, *, from_co
             text += f"🕐 {timestamp}\n"
             text += f"   <code>/{command}</code>: «{escape_html(q)}» ({results} рез.)\n\n"
 
-    keyboard = [
+    keyboard = []
+
+    # Pagination
+    nav_buttons = []
+    if page > 1:
+        nav_buttons.append(InlineKeyboardButton("⬅️", callback_data=f"history_page_{page - 1}"))
+    if total_pages > 1:
+        nav_buttons.append(InlineKeyboardButton(f"{page}/{total_pages}", callback_data="current_page"))
+    if page < total_pages:
+        nav_buttons.append(InlineKeyboardButton("➡️", callback_data=f"history_page_{page + 1}"))
+    if nav_buttons:
+        keyboard.append(nav_buttons)
+
+    if total > 0:
+        keyboard.append([InlineKeyboardButton("🗑 Очистить историю", callback_data="clear_search_history")])
+
+    keyboard.append(
         [
             InlineKeyboardButton("◀️ Назад", callback_data="nav_back"),
             InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu"),
         ]
-    ]
+    )
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     if from_command:
@@ -572,12 +596,15 @@ async def show_user_downloads(update: Update, context: CallbackContext, *, from_
             text += f"   ✍️ {escape_html(author)}\n"
             text += f"   📁 Формат: {format_type}\n\n"
 
-    keyboard = [
+    keyboard = []
+    if downloads:
+        keyboard.append([InlineKeyboardButton("🗑 Очистить историю", callback_data="clear_download_history")])
+    keyboard.append(
         [
             InlineKeyboardButton("◀️ Назад", callback_data="nav_back"),
             InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu"),
         ]
-    ]
+    )
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     if from_command:

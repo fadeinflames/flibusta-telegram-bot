@@ -129,7 +129,7 @@ async def show_favorites(update: Update, context: CallbackContext, *, page: int 
 
 
 async def toggle_favorite(book_id: str, update: Update, context: CallbackContext):
-    """Add / remove a book from favorites."""
+    """Add / remove a book from favorites (with confirmation for removal)."""
     user_id = str(update.effective_user.id)
 
     book = await book_from_cache(book_id)
@@ -138,8 +138,17 @@ async def toggle_favorite(book_id: str, update: Update, context: CallbackContext
         return
 
     if await db_call(db.is_favorite, user_id, book_id):
-        await db_call(db.remove_from_favorites, user_id, book_id)
-        await update.callback_query.answer("✅ Удалено из избранного", show_alert=False)
+        # Show confirmation before removing
+        text = f"❓ Удалить <b>{escape_html(truncate(book.title, 40))}</b> из избранного?"
+        kb = [
+            [
+                InlineKeyboardButton("✅ Да, удалить", callback_data=f"confirm_unfav_{book_id}"),
+                InlineKeyboardButton("❌ Нет", callback_data=f"book_{book_id}"),
+            ]
+        ]
+        await update.callback_query.answer()
+        await safe_edit_or_send(update.callback_query, context, text, InlineKeyboardMarkup(kb))
+        return
     else:
         success = await db_call(db.add_to_favorites, user_id, book_id, book.title, book.author)
         if success:
@@ -147,6 +156,14 @@ async def toggle_favorite(book_id: str, update: Update, context: CallbackContext
         else:
             await update.callback_query.answer("Уже в избранном", show_alert=False)
 
+    await show_book_details_with_favorite(book_id, update, context)
+
+
+async def confirm_remove_favorite(book_id: str, update: Update, context: CallbackContext):
+    """Actually remove a book from favorites after confirmation."""
+    user_id = str(update.effective_user.id)
+    await db_call(db.remove_from_favorites, user_id, book_id)
+    await update.callback_query.answer("✅ Удалено из избранного", show_alert=False)
     await show_book_details_with_favorite(book_id, update, context)
 
 

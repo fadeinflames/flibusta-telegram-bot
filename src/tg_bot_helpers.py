@@ -83,37 +83,6 @@ async def safe_edit_or_send(query, context: CallbackContext, text: str, reply_ma
         )
 
 
-async def send_or_edit_message(update: Update, context: CallbackContext, text: str, reply_markup):
-    """Send new message or edit existing (auto-detect by callback_query presence)."""
-    if len(text) > 4096:
-        text = text[:4092] + "…"
-    if update.callback_query:
-        try:
-            await update.callback_query.edit_message_text(
-                text,
-                reply_markup=reply_markup,
-                parse_mode=ParseMode.HTML,
-            )
-        except (BadRequest, Forbidden):
-            try:
-                await update.callback_query.delete_message()
-            except (BadRequest, Forbidden):
-                pass
-            await context.bot.send_message(
-                chat_id=update.effective_chat.id,
-                text=text,
-                reply_markup=reply_markup,
-                parse_mode=ParseMode.HTML,
-            )
-    else:
-        await context.bot.send_message(
-            chat_id=update.effective_chat.id,
-            text=text,
-            reply_markup=reply_markup,
-            parse_mode=ParseMode.HTML,
-        )
-
-
 # ────────────────────── Book cache ──────────────────────
 
 
@@ -224,6 +193,49 @@ async def perform_title_search(query: str, user_id: str):
     return books, "названию", "title", query
 
 
+async def perform_author_search(query: str):
+    """Author search with deduplication.
+
+    Returns list of unique books sorted by title, or None.
+    """
+    cache_key = f"author:{query}"
+    authors_books = cache_get(cache_key)
+    if authors_books is None:
+        authors_books = await flib_call(flib.scrape_books_by_author, query)
+        cache_set(cache_key, authors_books)
+
+    if not authors_books:
+        return None
+
+    all_books = []
+    for group in authors_books:
+        if group:
+            all_books.extend(group)
+
+    if not all_books:
+        return None
+
+    unique: dict[str, flib.Book] = {}
+    for b in all_books:
+        if b and hasattr(b, "id") and b.id not in unique:
+            unique[b.id] = b
+
+    return sorted(unique.values(), key=lambda x: x.title if x.title else "")
+
+
+async def perform_exact_search(title: str, author: str):
+    """Exact search by title + author with caching.
+
+    Returns list of books or None.
+    """
+    cache_key = f"exact:{title}|{author}"
+    books = cache_get(cache_key)
+    if books is None:
+        books = await flib_call(flib.scrape_books_mbl, title, author)
+        cache_set(cache_key, books)
+    return books or None
+
+
 # ────────────────────── Access decorators ──────────────────────
 
 
@@ -314,6 +326,20 @@ def check_callback_access(func):
             await query.answer("У вас нет доступа к этому боту", show_alert=True)
             return
 
+        return await func(update, context)
+
+    return wrapper
+
+
+def admin_only(func):
+    """Decorator: restrict command to admin user only."""
+
+    @wraps(func)
+    async def wrapper(update: Update, context: CallbackContext):
+        user_id = str(update.effective_user.id)
+        if not (ADMIN_USER_ID and user_id == ADMIN_USER_ID):
+            await update.message.reply_text("❌ У вас нет прав для этой команды.")
+            return
         return await func(update, context)
 
     return wrapper

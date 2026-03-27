@@ -4,17 +4,16 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ParseMode
 from telegram.ext import CallbackContext
 
-from src import config, flib
+from src import config
 from src import database as db
 from src.custom_logging import get_logger
 from src.tg_bot_helpers import (
     book_from_cache,
-    cache_get,
-    cache_set,
     check_access,
     db_call,
-    flib_call,
     handle_error,
+    perform_author_search,
+    perform_exact_search,
     perform_title_search,
     rate_limit,
     save_search_results,
@@ -98,39 +97,16 @@ async def search_by_author(update: Update, context: CallbackContext) -> None:
     mes = await update.message.reply_text("🔍 Ищу книги автора...")
 
     try:
-        cache_key = f"author:{author}"
-        authors_books = cache_get(cache_key)
-        if authors_books is None:
-            authors_books = await flib_call(flib.scrape_books_by_author, author)
-            cache_set(cache_key, authors_books)
+        books_list = await perform_author_search(author)
 
-        if not authors_books:
-            await db_call(db.add_search_history, user_id, "author", author, 0)
+        await db_call(db.add_search_history, user_id, "author", author, len(books_list) if books_list else 0)
+
+        if not books_list:
             await context.bot.delete_message(chat_id=mes.chat_id, message_id=mes.message_id)
             await update.message.reply_text(
                 f"😔 Автор «{author}» не найден.\nПопробуйте:\n• Проверить правописание\n• Использовать только фамилию"
             )
             return
-
-        all_books = []
-        for author_books in authors_books:
-            if author_books:
-                all_books.extend(author_books)
-
-        if not all_books:
-            await db_call(db.add_search_history, user_id, "author", author, 0)
-            await context.bot.delete_message(chat_id=mes.chat_id, message_id=mes.message_id)
-            await update.message.reply_text(f"😔 У автора «{author}» нет доступных книг.")
-            return
-
-        unique_books: dict[str, flib.Book] = {}
-        for book in all_books:
-            if book and hasattr(book, "id") and book.id not in unique_books:
-                unique_books[book.id] = book
-
-        books_list = sorted(unique_books.values(), key=lambda x: x.title if x.title else "")
-
-        await db_call(db.add_search_history, user_id, "author", author, len(books_list))
 
         save_search_results(context, books_list, "автору", author)
         await show_books_page(books_list, update, context, mes, page=1)
@@ -180,11 +156,7 @@ async def search_exact(update: Update, context: CallbackContext) -> None:
     mes = await update.message.reply_text("🔍 Выполняю точный поиск...")
 
     try:
-        cache_key = f"exact:{title}|{author}"
-        books = cache_get(cache_key)
-        if books is None:
-            books = await flib_call(flib.scrape_books_mbl, title, author)
-            cache_set(cache_key, books)
+        books = await perform_exact_search(title, author)
 
         await db_call(db.add_search_history, user_id, "exact", f"{title} | {author}", len(books) if books else 0)
 
@@ -355,25 +327,12 @@ async def find_the_book(update: Update, context: CallbackContext) -> None:
         context.user_data.pop("awaiting", None)
         mes = await update.message.reply_text("🔍 Ищу книги автора...")
         try:
-            cache_key = f"author:{search_string}"
-            authors_books = cache_get(cache_key)
-            if authors_books is None:
-                authors_books = await flib_call(flib.scrape_books_by_author, search_string)
-                cache_set(cache_key, authors_books)
-            if not authors_books:
-                await db_call(db.add_search_history, user_id, "author", search_string, 0)
+            books_list = await perform_author_search(search_string)
+            await db_call(db.add_search_history, user_id, "author", search_string, len(books_list) if books_list else 0)
+            if not books_list:
                 await context.bot.delete_message(chat_id=mes.chat_id, message_id=mes.message_id)
                 await update.message.reply_text(f"😔 Автор «{search_string}» не найден.")
                 return
-            all_books = []
-            for group in authors_books:
-                if group:
-                    all_books.extend(group)
-            unique: dict[str, flib.Book] = {}
-            for b in all_books:
-                unique.setdefault(b.id, b)
-            books_list = sorted(unique.values(), key=lambda x: x.title or "")
-            await db_call(db.add_search_history, user_id, "author", search_string, len(books_list))
             save_search_results(context, books_list, "автору", search_string)
             await show_books_page(books_list, update, context, mes, page=1)
         except Exception as e:
@@ -393,11 +352,7 @@ async def find_the_book(update: Update, context: CallbackContext) -> None:
         author_part = parts[1].strip()
         mes = await update.message.reply_text("🔍 Выполняю точный поиск...")
         try:
-            cache_key = f"exact:{title_part}|{author_part}"
-            books = cache_get(cache_key)
-            if books is None:
-                books = await flib_call(flib.scrape_books_mbl, title_part, author_part)
-                cache_set(cache_key, books)
+            books = await perform_exact_search(title_part, author_part)
             await db_call(
                 db.add_search_history, user_id, "exact", f"{title_part} | {author_part}", len(books) if books else 0
             )
@@ -448,11 +403,7 @@ async def find_the_book(update: Update, context: CallbackContext) -> None:
         mes = await update.message.reply_text("🔍 Ищу книгу по названию и автору...")
 
         try:
-            cache_key = f"exact:{title}|{author}"
-            books = cache_get(cache_key)
-            if books is None:
-                books = await flib_call(flib.scrape_books_mbl, title, author)
-                cache_set(cache_key, books)
+            books = await perform_exact_search(title, author)
 
             await db_call(
                 db.add_search_history,

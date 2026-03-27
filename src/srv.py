@@ -18,9 +18,11 @@ from telegram.ext.filters import TEXT
 from telegram.request import HTTPXRequest
 
 from src import database as db
+from src.rutracker_downloader import downloader as rt_downloader
 from src.tg_bot import (
     app_error_handler,
     button,
+    cancel_command,
     cleanup_job,
     downloads_command,
     favorites_command,
@@ -30,6 +32,10 @@ from src.tg_bot import (
     inline_query,
     list_allowed_users,
     mystats_command,
+    rt_admin_delete,
+    rt_admin_delete_all,
+    rt_admin_queue,
+    rt_admin_stop,
     search_by_author,
     search_by_id,
     search_by_title,
@@ -37,22 +43,22 @@ from src.tg_bot import (
     setformat_command,
     setpage_command,
     settings_command,
-    rt_admin_delete,
-    rt_admin_delete_all,
-    rt_admin_queue,
-    rt_admin_stop,
     show_stats,
     start_callback,
     universal_search,
 )
 from src.tg_bot_rutracker import audiobook_search_command, listening_command
-from src.rutracker_downloader import downloader as rt_downloader
 
 
 def main():
     # Инициализация базы данных
     db.init_database()
     print("[ OK ] База данных инициализирована")
+
+    # Reset downloads stuck in 'downloading' state from previous run
+    stuck = db.rt_reset_stuck_downloads()
+    if stuck:
+        print(f"[ OK ] Сброшено {stuck} зависших загрузок RuTracker")
 
     # Получаем токен
     token = os.getenv("TOKEN")
@@ -92,6 +98,7 @@ def main():
     # ===== ОСНОВНЫЕ КОМАНДЫ =====
     app.add_handler(CommandHandler("start", start_callback))
     app.add_handler(CommandHandler("help", help_command))
+    app.add_handler(CommandHandler("cancel", cancel_command))
 
     # ===== КОМАНДЫ ПОИСКА =====
     app.add_handler(CommandHandler("title", search_by_title))

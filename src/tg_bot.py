@@ -20,18 +20,13 @@ from telegram.ext import CallbackContext
 from src import config, flib
 from src import database as db
 from src.custom_logging import get_logger
-from src.tg_bot_rutracker import (
-    handle_rt_auto,
-    handle_rt_dl,
-    handle_rt_files_page,
-    handle_rt_pick,
-    handle_rt_page,
-)
+from src.rutracker_downloader import downloader as rt_downloader
 from src.tg_bot_download import (  # noqa: F401
     get_book_by_format,
     quick_download,
 )
 from src.tg_bot_favorites import (
+    confirm_remove_favorite,
     export_favorites,
     show_favorites,
     show_other_books_by_author,
@@ -43,6 +38,7 @@ from src.tg_bot_favorites import (
 from src.tg_bot_helpers import (  # noqa: F401 — re-exported
     ADMIN_USER_ID,
     ALLOWED_USERS,
+    admin_only,
     book_from_cache,
     cache_get,
     cache_set,
@@ -52,6 +48,8 @@ from src.tg_bot_helpers import (  # noqa: F401 — re-exported
     flib_call,
     handle_error,
     inc_error_stat,
+    perform_author_search,
+    perform_exact_search,
     rate_limit,
     safe_edit_or_send,
     save_search_results,
@@ -59,7 +57,13 @@ from src.tg_bot_helpers import (  # noqa: F401 — re-exported
 from src.tg_bot_nav import pop_nav as _pop_nav
 from src.tg_bot_nav import push_nav as _push_nav
 from src.tg_bot_presentation import escape_html, shelf_label
-from src.rutracker_downloader import downloader as rt_downloader
+from src.tg_bot_rutracker import (
+    handle_rt_auto,
+    handle_rt_dl,
+    handle_rt_files_page,
+    handle_rt_page,
+    handle_rt_pick,
+)
 
 # ── Submodule re-exports for srv.py ──
 from src.tg_bot_search import (  # noqa: F401
@@ -122,6 +126,16 @@ async def start_callback(update: Update, context: CallbackContext):
 async def help_command(update: Update, context: CallbackContext):
     """/help — full command reference."""
     await show_main_menu_command(update, context, is_start=False)
+
+
+@check_access
+async def cancel_command(update: Update, context: CallbackContext):
+    """/cancel — cancel awaiting input."""
+    awaiting = context.user_data.pop("awaiting", None)
+    if awaiting:
+        await update.message.reply_text("✅ Действие отменено.")
+    else:
+        await update.message.reply_text("Нечего отменять. Используйте /help для списка команд.")
 
 
 @check_access
@@ -199,14 +213,12 @@ async def setformat_command(update: Update, context: CallbackContext):
 
 
 @check_access
+@admin_only
 async def show_stats(update: Update, _: CallbackContext) -> None:
     """Global bot statistics (admin only)."""
-    user_id = str(update.effective_user.id)
+    stats = await db_call(db.get_global_stats)
 
-    if ADMIN_USER_ID and user_id == ADMIN_USER_ID:
-        stats = await db_call(db.get_global_stats)
-
-        stats_text = f"""📊 <b>Общая статистика бота</b>
+    stats_text = f"""📊 <b>Общая статистика бота</b>
 
 👥 <b>Пользователи:</b>
 • Всего: {stats["total_users"]}
@@ -219,59 +231,49 @@ async def show_stats(update: Update, _: CallbackContext) -> None:
 
 🔥 <b>Топ команд:</b>
 """
-        for i, cmd in enumerate(stats["top_commands"][:5], 1):
-            stats_text += f"{i}. /{cmd['command']}: {cmd['count']} раз\n"
+    for i, cmd in enumerate(stats["top_commands"][:5], 1):
+        stats_text += f"{i}. /{cmd['command']}: {cmd['count']} раз\n"
 
-        stats_text += "\n📚 <b>Топ книг:</b>\n"
-        for i, book in enumerate(stats["top_books"][:5], 1):
-            title = book["title"][:30] + "…" if len(book["title"]) > 30 else book["title"]
-            stats_text += f"{i}. {escape_html(title)} ({book['count']} скач.)\n"
+    stats_text += "\n📚 <b>Топ книг:</b>\n"
+    for i, book in enumerate(stats["top_books"][:5], 1):
+        title = book["title"][:30] + "…" if len(book["title"]) > 30 else book["title"]
+        stats_text += f"{i}. {escape_html(title)} ({book['count']} скач.)\n"
 
-        stats_text += "\n✍️ <b>Топ авторов:</b>\n"
-        for i, author in enumerate(stats["top_authors"][:5], 1):
-            name = author["author"][:25] + "…" if len(author["author"]) > 25 else author["author"]
-            stats_text += f"{i}. {escape_html(name)} ({author['count']} скач.)\n"
+    stats_text += "\n✍️ <b>Топ авторов:</b>\n"
+    for i, author in enumerate(stats["top_authors"][:5], 1):
+        name = author["author"][:25] + "…" if len(author["author"]) > 25 else author["author"]
+        stats_text += f"{i}. {escape_html(name)} ({author['count']} скач.)\n"
 
-        await update.message.reply_text(stats_text, parse_mode=ParseMode.HTML)
-    else:
-        await update.message.reply_text("❌ У вас нет прав для просмотра статистики")
+    await update.message.reply_text(stats_text, parse_mode=ParseMode.HTML)
 
 
 @check_access
+@admin_only
 async def list_allowed_users(update: Update, _: CallbackContext) -> None:
     """List allowed users (admin only)."""
-    user_id = str(update.effective_user.id)
+    if ALLOWED_USERS:
+        users_info = []
+        for uid in sorted(ALLOWED_USERS):
+            user_data = await db_call(db.get_user, uid)
+            if user_data:
+                users_info.append(f"• {uid} — {escape_html(user_data.get('full_name', 'Неизвестно'))}")
+            else:
+                users_info.append(f"• {uid} — (не в БД)")
 
-    if ADMIN_USER_ID and user_id == ADMIN_USER_ID:
-        if ALLOWED_USERS:
-            users_info = []
-            for uid in sorted(ALLOWED_USERS):
-                user_data = await db_call(db.get_user, uid)
-                if user_data:
-                    users_info.append(f"• {uid} — {escape_html(user_data.get('full_name', 'Неизвестно'))}")
-                else:
-                    users_info.append(f"• {uid} — (не в БД)")
-
-            users_list = "\n".join(users_info)
-            await update.message.reply_text(
-                f"📋 <b>Список разрешенных пользователей:</b>\n\n{users_list}\n\n"
-                f"<i>Всего: {len(ALLOWED_USERS)} пользователей</i>",
-                parse_mode=ParseMode.HTML,
-            )
-        else:
-            await update.message.reply_text("⚠️ Список разрешенных пользователей пуст. Доступ открыт для всех.")
+        users_list = "\n".join(users_info)
+        await update.message.reply_text(
+            f"📋 <b>Список разрешенных пользователей:</b>\n\n{users_list}\n\n"
+            f"<i>Всего: {len(ALLOWED_USERS)} пользователей</i>",
+            parse_mode=ParseMode.HTML,
+        )
     else:
-        await update.message.reply_text("❌ У вас нет прав для просмотра этой информации.")
+        await update.message.reply_text("⚠️ Список разрешенных пользователей пуст. Доступ открыт для всех.")
 
 
 @check_access
+@admin_only
 async def rt_admin_queue(update: Update, context: CallbackContext) -> None:
     """/rtqueue — RuTracker queue monitor (admin only)."""
-    user_id = str(update.effective_user.id)
-    if not (ADMIN_USER_ID and user_id == ADMIN_USER_ID):
-        await update.message.reply_text("❌ У вас нет прав для просмотра этой информации.")
-        return
-
     # Optional argument: /rtqueue 50
     limit = 20
     if context.args:
@@ -318,23 +320,17 @@ async def rt_admin_queue(update: Update, context: CallbackContext) -> None:
 
 
 @check_access
+@admin_only
 async def rt_admin_delete_all(update: Update, context: CallbackContext) -> None:
     """/rtdelall — очистить всю очередь RuTracker и файлы (admin only)."""
-    user_id = str(update.effective_user.id)
-    if not (ADMIN_USER_ID and user_id == ADMIN_USER_ID):
-        await update.message.reply_text("❌ У вас нет прав для этой команды.")
-        return
     ok, msg = rt_downloader.delete_all_tasks()
     await update.message.reply_text(f"{'✅' if ok else '❌'} {msg}")
 
 
 @check_access
+@admin_only
 async def rt_admin_stop(update: Update, context: CallbackContext) -> None:
     """/rtstop <id> — отменить задачу RuTracker (admin only)."""
-    user_id = str(update.effective_user.id)
-    if not (ADMIN_USER_ID and user_id == ADMIN_USER_ID):
-        await update.message.reply_text("❌ У вас нет прав для этой команды.")
-        return
     if not context.args:
         await update.message.reply_text(
             "Использование: <code>/rtstop &lt;id&gt;</code>\n"
@@ -352,12 +348,9 @@ async def rt_admin_stop(update: Update, context: CallbackContext) -> None:
 
 
 @check_access
+@admin_only
 async def rt_admin_delete(update: Update, context: CallbackContext) -> None:
     """/rtdel <id> — удалить задачу из очереди и файлы на диске (admin only)."""
-    user_id = str(update.effective_user.id)
-    if not (ADMIN_USER_ID and user_id == ADMIN_USER_ID):
-        await update.message.reply_text("❌ У вас нет прав для этой команды.")
-        return
     if not context.args:
         await update.message.reply_text(
             "Использование: <code>/rtdel &lt;id&gt;</code>\n"
@@ -407,6 +400,11 @@ async def _render_nav_entry(entry: dict, update: Update, context: CallbackContex
 async def _handle_toggle_favorite(data: str, query, update: Update, context: CallbackContext):
     book_id = data[len("toggle_favorite_") :]
     await toggle_favorite(book_id, update, context)
+
+
+async def _handle_confirm_unfav(data: str, query, update: Update, context: CallbackContext):
+    book_id = data[len("confirm_unfav_") :]
+    await confirm_remove_favorite(book_id, update, context)
 
 
 async def _handle_get_book_by_format(data: str, query, update: Update, context: CallbackContext):
@@ -568,6 +566,7 @@ async def _handle_fav_book(data: str, query, update: Update, context: CallbackCo
 # handlers that do their own query.answer() have needs_answer_before=False
 _PREFIX_HANDLERS = [
     ("toggle_favorite_", _handle_toggle_favorite, False),
+    ("confirm_unfav_", _handle_confirm_unfav, False),
     ("get_book_by_format_", _handle_get_book_by_format, False),
     ("fmt_", _handle_fmt, False),
     ("qd_", _handle_qd, False),
@@ -701,27 +700,14 @@ async def button(update: Update, context: CallbackContext) -> None:
         cmd = last["command"]
         q = last["query"]
 
-        cache_key = f"{cmd}:{q}"
-        books = cache_get(cache_key)
-        if books is None:
-            if cmd == "author":
-                raw = await flib_call(flib.scrape_books_by_author, q)
-                if raw:
-                    all_b = []
-                    for group in raw:
-                        all_b.extend(group)
-                    unique: dict[str, flib.Book] = {}
-                    for b in all_b:
-                        unique.setdefault(b.id, b)
-                    books = list(unique.values())
-                else:
-                    books = None
-            elif cmd == "exact" and "|" in q:
-                t, a = q.split("|", 1)
-                books = await flib_call(flib.scrape_books_mbl, t.strip(), a.strip())
-            else:
-                books = await flib_call(flib.scrape_books_by_title, q)
-            cache_set(cache_key, books)
+        if cmd == "author":
+            books = await perform_author_search(q)
+        elif cmd == "exact" and "|" in q:
+            t, a = q.split("|", 1)
+            books = await perform_exact_search(t.strip(), a.strip())
+        else:
+            from src.tg_bot_helpers import perform_title_search
+            books, _, _, _ = await perform_title_search(q, user_id)
 
         if not books:
             try:
@@ -762,6 +748,29 @@ async def button(update: Update, context: CallbackContext) -> None:
         await query.answer()
         _push_nav(context, {"type": "main_menu"})
         await show_user_settings(update, context)
+        return
+
+    if data == "clear_search_history":
+        user_id = str(update.effective_user.id)
+        count = await db_call(db.clear_search_history, user_id)
+        await query.answer(f"🗑 Удалено {count} записей", show_alert=False)
+        await show_user_history(update, context)
+        return
+
+    if data == "clear_download_history":
+        user_id = str(update.effective_user.id)
+        count = await db_call(db.clear_download_history, user_id)
+        await query.answer(f"🗑 Удалено {count} записей", show_alert=False)
+        await show_user_downloads(update, context)
+        return
+
+    if data.startswith("history_page_"):
+        try:
+            page = int(data.split("_")[2])
+            await query.answer()
+            await show_user_history(update, context, page=page)
+        except (ValueError, IndexError):
+            pass
         return
 
     if data in ("back_to_results", "nav_back"):
