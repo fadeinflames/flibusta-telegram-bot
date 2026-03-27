@@ -12,7 +12,6 @@ import asyncio
 import html
 import logging
 import os
-import re
 import shutil
 import subprocess
 import time
@@ -408,6 +407,86 @@ class RutrackerDownloader:
             # Editing can fail if message was deleted/too old; ignore.
             pass
 
+    async def _aria2c_disk_progress_loop(
+        self,
+        task: DownloadTask,
+        torrent_path: Path,
+        dest_dir: Path,
+        status_message_id: int | None,
+        done: asyncio.Event,
+    ) -> None:
+        """Poll bytes on disk so Telegram shows real progress (not fragile aria2 stdout parsing)."""
+        if status_message_id is None:
+            while not done.is_set():
+                try:
+                    await asyncio.wait_for(done.wait(), timeout=2.0)
+                    break
+                except asyncio.TimeoutError:
+                    if task.task_id in self._cancelled_ids:
+                        break
+            return
+
+        expected = task.file_size or 0
+        last_size = 0
+        last_t = time.time()
+        started = last_t
+        poll_s = 1.8
+
+        while not done.is_set():
+            if task.task_id in self._cancelled_ids:
+                break
+
+            def _measure() -> int:
+                return _dir_bytes_excluding_torrent(dest_dir, torrent_path)
+
+            size = await asyncio.get_running_loop().run_in_executor(None, _measure)
+            now = time.time()
+            elapsed = int(now - started)
+            dt = now - last_t
+            speed_bps = (size - last_size) / dt if dt > 0.4 and size >= last_size else 0.0
+
+            if size == 0 and elapsed < 25:
+                phase = "🔄 <b>Подключение к пирам</b> — метаданные и поиск сидов…"
+            elif size == 0:
+                phase = (
+                    "🔄 <b>Ожидание данных</b> — на диске пока 0 байт. "
+                    "Если так долго, у релиза может не быть сидов."
+                )
+            else:
+                phase = "📥 <b>Идёт загрузка на диск</b>"
+
+            size_line = _fmt_bytes_short(size)
+            if expected > 0:
+                size_line += f" / {_fmt_bytes_short(expected)}"
+                pct = min(100, int(100 * size / expected))
+                pct_line = f"\nПо размеру файла: ~{pct}%"
+            else:
+                pct_line = "\nРазмер из торрента неизвестен — смотрим только фактические байты."
+
+            speed_txt = _fmt_speed_bps(speed_bps)
+            if size > 0 and speed_bps < 2048 and elapsed > 45:
+                speed_txt += " (очень медленно или пауза)"
+
+            text = (
+                f"{phase}\n"
+                f"ID: #{task.task_id}\n"
+                f"Сиды (из поиска): {task.seeders}\n"
+                f"Файл: <code>{html.escape(task.filename or 'не указан')}</code>\n\n"
+                f"Скачано на диск: <b>{size_line}</b>{pct_line}\n"
+                f"Скорость: {speed_txt}\n"
+                f"Время: {elapsed} сек"
+            )
+            await self._edit_status(task.chat_id, status_message_id, text)
+
+            last_size = size
+            last_t = now
+
+            try:
+                await asyncio.wait_for(done.wait(), timeout=poll_s)
+                break
+            except asyncio.TimeoutError:
+                continue
+
     async def _aria2c_download_with_progress(
         self,
         task: DownloadTask,
@@ -419,6 +498,9 @@ class RutrackerDownloader:
         if not aria2c:
             raise RuntimeError("aria2c not found. Install: apt-get install aria2 / brew install aria2")
 
+        tpath = Path(torrent_path)
+        dpath = Path(dest_dir)
+
         cmd = [
             aria2c,
             "--dir",
@@ -428,7 +510,7 @@ class RutrackerDownloader:
             "--split=4",
             "--file-allocation=none",
             "--summary-interval=2",
-            "--console-log-level=notice",
+            "--console-log-level=warn",
         ]
         if task.file_index is not None:
             cmd.extend(["--select-file", str(task.file_index)])
@@ -442,47 +524,43 @@ class RutrackerDownloader:
         )
         self._active_task_id = task.task_id
         self._active_proc = proc
-        try:
-            progress_re = re.compile(r"\((\d+)%\).*DL:([^\s]+).*ETA:([^\s]+)")
-            last_emit_ts = 0.0
-            last_percent = -1
-            while True:
-                if task.task_id in self._cancelled_ids:
-                    try:
-                        proc.terminate()
-                    except ProcessLookupError:
-                        pass
-                    break
-                line = await proc.stdout.readline() if proc.stdout else b""
-                if not line:
-                    break
-                text = line.decode("utf-8", errors="ignore").strip()
-                if text:
-                    logger.debug("aria2c out task_id=%s: %s", task.task_id, text)
-                match = progress_re.search(text)
-                if not match:
-                    continue
-                percent, speed, eta = int(match.group(1)), match.group(2), match.group(3)
-                now = time.time()
-                if percent != last_percent and now - last_emit_ts >= 1.5:
-                    await self._edit_status(
-                        task.chat_id,
-                        status_message_id,
-                        "📥 <b>Идёт загрузка</b>\n"
-                        f"ID: #{task.task_id}\n"
-                        f"Сиды: {task.seeders}\n"
-                        f"Файл: <code>{html.escape(task.filename or 'не указан')}</code>\n"
-                        f"Прогресс: {percent}%\n"
-                        f"Скорость: {speed}\n"
-                        f"ETA: {eta}",
-                    )
-                    last_emit_ts = now
-                    last_percent = percent
+        done = asyncio.Event()
 
+        async def _drain_stdout() -> None:
+            assert proc.stdout is not None
+            while True:
+                chunk = await proc.stdout.readline()
+                if not chunk:
+                    break
+                line = chunk.decode("utf-8", errors="ignore").strip()
+                if line:
+                    logger.debug("aria2c out task_id=%s: %s", task.task_id, line[:300])
+
+        drain_task = asyncio.create_task(_drain_stdout())
+        poll_task = asyncio.create_task(
+            self._aria2c_disk_progress_loop(task, tpath, dpath, status_message_id, done)
+        )
+
+        try:
             rc = await proc.wait()
+            done.set()
+            poll_task.cancel()
+            try:
+                await poll_task
+            except asyncio.CancelledError:
+                pass
+            await drain_task
             logger.info("aria2c finished: task_id=%s rc=%s", task.task_id, rc)
             return rc == 0
         finally:
+            if not done.is_set():
+                done.set()
+            if not poll_task.done():
+                poll_task.cancel()
+                try:
+                    await poll_task
+                except asyncio.CancelledError:
+                    pass
             if self._active_task_id == task.task_id:
                 self._active_task_id = None
                 self._active_proc = None
@@ -490,6 +568,48 @@ class RutrackerDownloader:
 
 def dest_dir_for_cleanup(topic_id: str) -> Path:
     return Path(RUTRACKER_DOWNLOAD_DIR) / topic_id
+
+
+def _dir_bytes_excluding_torrent(root: Path, torrent_path: Path) -> int:
+    """Sum size of files under root except the .torrent metadata file (real download progress)."""
+    if not root.exists():
+        return 0
+    total = 0
+    try:
+        t_res = torrent_path.resolve()
+    except OSError:
+        t_res = None
+    for p in root.rglob("*"):
+        if not p.is_file():
+            continue
+        try:
+            if t_res is not None and p.resolve() == t_res:
+                continue
+        except OSError:
+            pass
+        try:
+            total += p.stat().st_size
+        except OSError:
+            pass
+    return total
+
+
+def _fmt_speed_bps(bps: float) -> str:
+    if bps < 512:
+        return "≈0 (ждём пиров)"
+    if bps < 1024 * 1024:
+        return f"~{bps / 1024:.1f} KB/s"
+    return f"~{bps / 1024 / 1024:.2f} MB/s"
+
+
+def _fmt_bytes_short(n: int) -> str:
+    if n < 1024:
+        return f"{n} B"
+    if n < 1024 * 1024:
+        return f"{n / 1024:.1f} KB"
+    if n < 1024**3:
+        return f"{n / 1024 / 1024:.2f} MB"
+    return f"{n / 1024**3:.2f} GB"
 
 
 def _compress_for_telegram(path: str) -> str | None:
