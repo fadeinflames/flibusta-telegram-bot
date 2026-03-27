@@ -570,12 +570,10 @@ async def handle_ab_auto(data: str, query, update: Update, context: CallbackCont
         parse_mode=ParseMode.HTML,
     )
 
-    # Search by clean title + author first, then title only as fallback
-    search_query = f"{clean_title} {book.author}".strip()
-    results = await flib_call(akniga.search_audiobooks, search_query)
-
-    if not results:
-        results = await flib_call(akniga.search_audiobooks, clean_title)
+    # Search by clean title only — gives the most relevant results.
+    # Full-name author query (e.g. "Джон Рональд Руэл Толкин") often misses the target
+    # because akniga.org stores author names differently.
+    results = await flib_call(akniga.search_audiobooks, clean_title)
 
     await msg.delete()
 
@@ -591,7 +589,7 @@ async def handle_ab_auto(data: str, query, update: Update, context: CallbackCont
     context.user_data["ab_search_results"] = results
     context.user_data["ab_search_query"] = clean_title
 
-    await _show_audiobook_results(results, book.title, page=1, update=update, context=context)
+    await _show_audiobook_results(results, clean_title, page=1, update=update, context=context)
 
 
 async def handle_ab_back_results(data: str, query, update: Update, context: CallbackContext) -> None:
