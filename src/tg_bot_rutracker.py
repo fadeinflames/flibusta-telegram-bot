@@ -3,13 +3,18 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
+from pathlib import Path
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ParseMode
 from telegram.ext import CallbackContext
 
+from src import database as db
 from src import rutracker
+from src.config import RUTRACKER_USERNAME
 from src.rutracker_downloader import downloader
+from src.tg_bot_helpers import check_access, db_call
 from src.tg_bot_presentation import escape_html
 
 logger = logging.getLogger(__name__)
@@ -41,6 +46,64 @@ def _fmt_bytes(size: int) -> str:
             return f"{val:.1f} {unit}"
         val /= 1024.0
     return f"{size} B"
+
+
+_RE_LEADING_NUM = re.compile(r"^0*(\d+)(?:\s*[\.\)\]\-_]\s*(.+))?$", re.UNICODE)
+
+
+def _human_audio_chapter_label(filename: str) -> str:
+    """Понятная подпись вместо сырых 001.mp3 / 002_foo.m4b — главы и разделы."""
+    base = Path((filename or "").rsplit("/", 1)[-1]).stem.strip()
+    if not base:
+        return filename.rsplit("/", 1)[-1] or "?"
+
+    gl = re.search(r"(?i)глава\s*[:#]?\s*(\d+)(?:\s*[.\-—]\s*(.+))?", base)
+    if gl:
+        n, tail = int(gl.group(1)), (gl.group(2) or "").strip()
+        return f"Глава {n} — {tail}" if tail else f"Глава {n}"
+
+    ch = re.search(r"(?i)часть\s*[:#]?\s*(\d+)(?:\s*[.\-—]\s*(.+))?", base)
+    if ch:
+        n, tail = int(ch.group(1)), (ch.group(2) or "").strip()
+        return f"Часть {n} — {tail}" if tail else f"Часть {n}"
+
+    tr = re.search(r"(?i)track\s*0*(\d+)", base)
+    if tr:
+        return f"Трек {int(tr.group(1))}"
+
+    cd = re.search(r"(?i)(?:cd|диск)\s*0*(\d+)", base)
+    if cd:
+        return f"Диск {int(cd.group(1))}"
+
+    m = _RE_LEADING_NUM.match(base)
+    if m:
+        n = int(m.group(1))
+        rest = (m.group(2) or "").strip(" -._—")
+        if rest:
+            return f"Глава {n} — {rest}"
+        return f"Глава {n}"
+
+    return base
+
+
+def _rt_chunk_lines_and_buttons(
+    chunk: list[rutracker.FileEntry],
+    start_idx: int,
+) -> tuple[list[str], list[list[InlineKeyboardButton]]]:
+    """Текст и кнопки для страницы списка файлов (человекочитаемые подписи)."""
+    lines: list[str] = []
+    rows: list[list[InlineKeyboardButton]] = []
+    for i, entry in enumerate(chunk, start=start_idx + 1):
+        size_str = _fmt_bytes(entry.size_bytes)
+        warn = " ⚠️ >49MB" if entry.size_bytes > _TG_AUDIO_LIMIT else ""
+        short_name = entry.filename.rsplit("/", 1)[-1]
+        human = _human_audio_chapter_label(short_name)
+        lines.append(f"{i}. {escape_html(human)} — {size_str}{warn}")
+        btn = human if len(human) <= 38 else human[:35] + "…"
+        rows.append(
+            [InlineKeyboardButton(f"{i}. {btn[:40]}", callback_data=f"rt_pick_{entry.index_in_torrent}")]
+        )
+    return lines, rows
 
 
 def _results_text(results: list[rutracker.RTopic], query: str, page: int) -> str:
@@ -116,6 +179,10 @@ async def handle_rt_auto(
     import re
     from src.tg_bot_helpers import book_from_cache
 
+    if not RUTRACKER_USERNAME:
+        await query.answer("RuTracker не настроен в .env", show_alert=True)
+        return
+
     book_id = data[len("rt_auto_"):]
     logger.info("rt auto: user=%s book_id=%s", update.effective_user.id, book_id)
     await query.answer("🔍 Ищу на RuTracker…")
@@ -147,7 +214,8 @@ async def handle_rt_auto(
         await context.bot.send_message(
             update.effective_chat.id,
             f"😔 На RuTracker ничего не нашлось по запросу «{search_query}».\n"
-            "Попробуйте команду /audiobook для поиска на akniga.org.",
+            "Попробуйте другой запрос или <code>/audiobook …</code> вручную.",
+            parse_mode=ParseMode.HTML,
         )
         return
 
@@ -321,18 +389,14 @@ async def _show_rt_topic_files(update: Update, context: CallbackContext, page: i
 
     lines.extend(
         [
-            f"Выберите главу/файл для скачивания ({total}):",
+            f"Выберите главу или раздел для скачивания ({total}):",
             f"Страница {page + 1}/{total_pages}",
             "",
         ]
     )
-    rows = []
-    for i, entry in enumerate(chunk, start=start + 1):
-        size_str = _fmt_bytes(entry.size_bytes)
-        warn = " ⚠️ >49MB" if entry.size_bytes > _TG_AUDIO_LIMIT else ""
-        short_name = entry.filename.rsplit("/", 1)[-1]
-        lines.append(f"{i}. {escape_html(short_name)} — {size_str}{warn}")
-        rows.append([InlineKeyboardButton(f"{i}. {short_name[:34]}", callback_data=f"rt_pick_{entry.index_in_torrent}")])
+    chunk_lines, chunk_rows = _rt_chunk_lines_and_buttons(chunk, start)
+    lines.extend(chunk_lines)
+    rows = chunk_rows
 
     nav = []
     if page > 0:
@@ -360,16 +424,13 @@ async def _show_rt_topic_files(update: Update, context: CallbackContext, page: i
             lines.extend(["", "📝 <b>Описание раздачи</b>", f"<i>{desc_short}</i>", ""])
             lines.extend(
                 [
-                    f"Выберите главу/файл для скачивания ({total}):",
+                    f"Выберите главу или раздел для скачивания ({total}):",
                     f"Страница {page + 1}/{total_pages}",
                     "",
                 ]
             )
-            for i, entry in enumerate(chunk, start=start + 1):
-                size_str = _fmt_bytes(entry.size_bytes)
-                warn = " ⚠️ >49MB" if entry.size_bytes > _TG_AUDIO_LIMIT else ""
-                short_name = entry.filename.rsplit("/", 1)[-1]
-                lines.append(f"{i}. {escape_html(short_name)} — {size_str}{warn}")
+            chunk_lines2, _ = _rt_chunk_lines_and_buttons(chunk, start)
+            lines.extend(chunk_lines2)
             text = "\n".join(lines)
         if len(text) > _TG_MSG_MAX:
             text = text[: _TG_MSG_MAX - 4] + "…"
@@ -430,3 +491,78 @@ async def _do_topic_files(topic_id: str, context: CallbackContext) -> list[rutra
     except Exception as exc:
         logger.exception("RuTracker file list error: topic=%s", topic_id)
         return []
+
+
+# ── /audiobook, /listening (команды) ───────────────────────────────────────────
+
+
+@check_access
+async def audiobook_search_command(update: Update, context: CallbackContext) -> None:
+    """Поиск аудиокниг на RuTracker."""
+    if not RUTRACKER_USERNAME:
+        await update.message.reply_text(
+            "⚠️ RuTracker не настроен: задайте <code>RUTRACKER_USERNAME</code> и "
+            "<code>RUTRACKER_PASSWORD</code> в .env",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    query = " ".join(context.args).strip() if context.args else ""
+    if not query:
+        await update.message.reply_text(
+            "🎧 <b>Поиск аудиокниг на RuTracker</b>\n\n"
+            "Использование: <code>/audiobook Название или автор</code>\n\n"
+            "Пример: <code>/audiobook Достоевский</code>",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    user_id = update.effective_user.id
+    logger.info("audiobook (RuTracker) search user=%s query=%r", user_id, query)
+
+    msg = await update.message.reply_text("⏳ Ищу на RuTracker…")
+    results = await _do_search(query, context)
+    try:
+        await msg.delete()
+    except Exception:
+        pass
+
+    if not results:
+        await update.message.reply_text(
+            f"😔 На RuTracker ничего не найдено по запросу «{escape_html(query)}».\n"
+            "Попробуйте другие слова.",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    context.user_data[_RT_RESULTS_KEY] = {"results": results, "query": query}
+    await _show_rt_results(results, query, 1, update, context, edit=False)
+
+
+@check_access
+async def listening_command(update: Update, context: CallbackContext) -> None:
+    """Активные загрузки аудио с RuTracker."""
+    user_id = update.effective_user.id
+    rows = await db_call(db.rt_pending_for_user, user_id)
+    if not rows:
+        extra = ""
+        if not RUTRACKER_USERNAME:
+            extra = "\n\n⚠️ RuTracker не настроен в .env."
+        await update.message.reply_text(
+            "🎧 <b>Нет активных загрузок</b>\n\n"
+            "Добавьте аудиокнигу с карточки книги или командой "
+            "<code>/audiobook запрос</code>."
+            + extra,
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    lines = ["🎧 <b>Ваша очередь RuTracker</b>\n"]
+    for r in rows:
+        title = escape_html((r.get("title") or "")[:120])
+        st = escape_html(str(r.get("status") or ""))
+        fn = escape_html((r.get("filename") or "")[:60])
+        lines.append(f"• #{r.get('id')} — <i>{st}</i>\n  {title}")
+        if fn:
+            lines.append(f"  <code>{fn}</code>")
+    await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)

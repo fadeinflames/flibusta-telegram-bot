@@ -16,8 +16,6 @@ requests = "^2.31"
 beautifulsoup4 = "^4.12"
 lxml = "^4.9"
 json-log-formatter = "^1.1"
-pycryptodome = "^3.20"
-m3u8 = "^3.5"
 
 
 [tool.poetry.group.dev.dependencies]

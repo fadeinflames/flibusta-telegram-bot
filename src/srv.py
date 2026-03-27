@@ -45,7 +45,7 @@ from src.tg_bot import (
     start_callback,
     universal_search,
 )
-from src.tg_bot_audio import audiobook_search_command, listening_command
+from src.tg_bot_rutracker import audiobook_search_command, listening_command
 from src.rutracker_downloader import downloader as rt_downloader
 
 
@@ -142,9 +142,9 @@ def main():
     print("🤖 БОТ ЗАПУЩЕН И ГОТОВ К РАБОТЕ!")
     print("=" * 50)
     print()
-    print("АУДИОКНИГИ (akniga.org):")
-    print("  /audiobook <запрос>  - поиск аудиокниг")
-    print("  /listening           - что сейчас слушаю")
+    print("АУДИОКНИГИ (RuTracker):")
+    print("  /audiobook <запрос>  - поиск аудиокниг на RuTracker")
+    print("  /listening           - очередь загрузок аудио")
     print()
     print("КОМАНДЫ ПОИСКА:")
     print("  /title <название>    - поиск по названию")

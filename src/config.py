@@ -49,14 +49,6 @@ ACHIEVEMENT_LEVELS = [
     {"name": "👑 Мастер", "searches": 1000, "downloads": 250},
 ]
 
-# ──────────────────── Audiobooks (akniga.org) ────────────────────
-AKNIGA_SITE = "https://akniga.org"
-AKNIGA_AJAX_KEY = "EKxtcg46V"
-AKNIGA_SEARCH_URL = "https://akniga.org/search/q/{query}/"
-AUDIOBOOK_CACHE_TTL_DAYS = 7
-AUDIO_MAX_SIZE = 50 * 1024 * 1024  # 50 MB — Telegram audio limit
-FFMPEG_TIMEOUT = 300  # seconds
-
 # ──────────────────── RuTracker ────────────────────
 RUTRACKER_USERNAME = os.getenv("RUTRACKER_USERNAME", "")
 RUTRACKER_PASSWORD = os.getenv("RUTRACKER_PASSWORD", "")

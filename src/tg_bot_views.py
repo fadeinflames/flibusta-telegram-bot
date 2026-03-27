@@ -251,10 +251,10 @@ async def show_book_details_with_favorite(book_id: str, update: Update, context:
         kb.append(fmt_buttons[i : i + 3])
 
     from src.config import RUTRACKER_USERNAME
-    audio_row = [InlineKeyboardButton("🎧 Аудиокнига", callback_data=f"ab_auto_{book_id}")]
     if RUTRACKER_USERNAME:
-        audio_row.append(InlineKeyboardButton("🎧 RuTracker", callback_data=f"rt_auto_{book_id}"))
-    kb.append(audio_row)
+        kb.append(
+            [InlineKeyboardButton("🎧 Аудиокнига", callback_data=f"rt_auto_{book_id}")]
+        )
 
     kb.append([InlineKeyboardButton("ℹ️ Подробнее о книге", callback_data=f"book_meta_{book_id}")])
 
