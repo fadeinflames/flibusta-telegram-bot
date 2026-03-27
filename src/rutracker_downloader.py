@@ -324,8 +324,9 @@ class RutrackerDownloader:
             if selected:
                 audio_files = selected[:1]
             elif audio_files:
-                # Fallback: if exact name is missing, send just one file, never a batch.
-                audio_files = audio_files[:1]
+                # Fallback: if exact name is missing, filter loosely by size to avoid adjacent partially downloaded pieces
+                valid = [p for p in audio_files if _file_size_ready(p, task.file_size)]
+                audio_files = valid[:1] if valid else []
         if not audio_files:
             logger.error("rt process: no audio files after download task_id=%s topic=%s", task.task_id, task.topic_id)
             raise RuntimeError("No audio files found after download")
@@ -519,6 +520,15 @@ class RutrackerDownloader:
                 break
 
             def _measure() -> int:
+                if task.filename:
+                    # Измеряем только целевой файл (соседние скачанные файлы не плюсуются)
+                    cached = _find_resolved_audio_path(dest_dir, task.filename)
+                    if cached:
+                        try:
+                            return cached.stat().st_size
+                        except OSError:
+                            pass
+                    return 0
                 return _dir_bytes_excluding_torrent(dest_dir, torrent_path)
 
             size = await asyncio.get_running_loop().run_in_executor(None, _measure)
@@ -590,8 +600,7 @@ class RutrackerDownloader:
             "--dir",
             dest_dir,
             "--seed-time=0",
-            "--max-connection-per-server=4",
-            "--split=4",
+            "--bt-stop-timeout=120",
             "--file-allocation=none",
             "--summary-interval=2",
             "--console-log-level=warn",
