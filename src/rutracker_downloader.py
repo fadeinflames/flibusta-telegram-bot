@@ -9,8 +9,10 @@ Requires: aria2c installed on the system (apt-get install aria2 / brew install a
 from __future__ import annotations
 
 import asyncio
+import html
 import logging
 import os
+import re
 import shutil
 import subprocess
 import time
@@ -125,13 +127,14 @@ class RutrackerDownloader:
         started_at = time.time()
         db.rt_update_status(task.task_id, "downloading")
         logger.info("Downloading torrent topic=%s", task.topic_id)
-        await self._notify(
+        status_message = await self._notify(
             task.chat_id,
             "🚀 <b>Задача запущена</b>\n"
             f"ID: #{task.task_id}\n"
             f"Сиды: {task.seeders}\n"
             f"Размер релиза: {task.topic_size or '?'}\n"
-            f"Файл: <code>{task.filename or 'не указан'}</code>",
+            f"Файл: <code>{html.escape(task.filename or 'не указан')}</code>\n"
+            "Статус: подготовка…",
         )
 
         # Download .torrent bytes
@@ -149,8 +152,11 @@ class RutrackerDownloader:
         torrent_path.write_bytes(torrent_bytes)
 
         # Run aria2c
-        ok = await asyncio.get_event_loop().run_in_executor(
-            None, _aria2c_download, str(torrent_path), str(dest_dir), task.file_index
+        ok = await self._aria2c_download_with_progress(
+            task=task,
+            torrent_path=str(torrent_path),
+            dest_dir=str(dest_dir),
+            status_message_id=status_message.message_id if status_message else None,
         )
         torrent_path.unlink(missing_ok=True)
 
@@ -175,7 +181,14 @@ class RutrackerDownloader:
         db.rt_update_status(task.task_id, "done")
         logger.info("Downloaded %d audio files for topic %s", len(audio_files), task.topic_id)
         elapsed = max(1, int(time.time() - started_at))
-        await self._notify(task.chat_id, f"📥 Скачивание завершено за {elapsed} сек. Готовлю отправку…")
+        await self._edit_status(
+            task.chat_id,
+            status_message.message_id if status_message else None,
+            "✅ <b>Скачивание завершено</b>\n"
+            f"ID: #{task.task_id}\n"
+            f"Время: {elapsed} сек\n"
+            "Статус: готовлю отправку…",
+        )
 
         # Send to user
         await self._send_audio_files(task, audio_files)
@@ -223,44 +236,97 @@ class RutrackerDownloader:
         # Cleanup
         shutil.rmtree(str(dest_dir_for_cleanup(task.topic_id)), ignore_errors=True)
 
-    async def _notify(self, chat_id: int, text: str) -> None:
+    async def _notify(self, chat_id: int, text: str):
         if self._app is None:
-            return
+            return None
         try:
-            await self._app.bot.send_message(
+            return await self._app.bot.send_message(
                 chat_id=chat_id, text=text, parse_mode="HTML"
             )
         except Exception as exc:
             logger.warning("Notify failed: %s", exc)
+            return None
+
+    async def _edit_status(self, chat_id: int, message_id: int | None, text: str) -> None:
+        if self._app is None or message_id is None:
+            return
+        try:
+            await self._app.bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=message_id,
+                text=text,
+                parse_mode="HTML",
+            )
+        except Exception:
+            # Editing can fail if message was deleted/too old; ignore.
+            pass
+
+    async def _aria2c_download_with_progress(
+        self,
+        task: DownloadTask,
+        torrent_path: str,
+        dest_dir: str,
+        status_message_id: int | None,
+    ) -> bool:
+        aria2c = shutil.which("aria2c")
+        if not aria2c:
+            raise RuntimeError("aria2c not found. Install: apt-get install aria2 / brew install aria2")
+
+        cmd = [
+            aria2c,
+            "--dir",
+            dest_dir,
+            "--seed-time=0",
+            "--max-connection-per-server=4",
+            "--split=4",
+            "--file-allocation=none",
+            "--summary-interval=2",
+            "--console-log-level=notice",
+        ]
+        if task.file_index is not None:
+            cmd.extend(["--select-file", str(task.file_index)])
+        cmd.append(torrent_path)
+        logger.info("aria2c cmd: %s", " ".join(cmd))
+
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+        )
+
+        progress_re = re.compile(r"\((\d+)%\).*DL:([^\s]+).*ETA:([^\s]+)")
+        last_emit_ts = 0.0
+        last_percent = -1
+        while True:
+            line = await proc.stdout.readline() if proc.stdout else b""
+            if not line:
+                break
+            text = line.decode("utf-8", errors="ignore").strip()
+            match = progress_re.search(text)
+            if not match:
+                continue
+            percent, speed, eta = int(match.group(1)), match.group(2), match.group(3)
+            now = time.time()
+            if percent != last_percent and now - last_emit_ts >= 1.5:
+                await self._edit_status(
+                    task.chat_id,
+                    status_message_id,
+                    "📥 <b>Идёт загрузка</b>\n"
+                    f"ID: #{task.task_id}\n"
+                    f"Сиды: {task.seeders}\n"
+                    f"Файл: <code>{html.escape(task.filename or 'не указан')}</code>\n"
+                    f"Прогресс: {percent}%\n"
+                    f"Скорость: {speed}\n"
+                    f"ETA: {eta}",
+                )
+                last_emit_ts = now
+                last_percent = percent
+
+        return await proc.wait() == 0
 
 
 def dest_dir_for_cleanup(topic_id: str) -> Path:
     return Path(RUTRACKER_DOWNLOAD_DIR) / topic_id
-
-
-def _aria2c_download(torrent_path: str, dest_dir: str, file_index: int | None = None) -> bool:
-    """Run aria2c synchronously.  Returns True on success."""
-    aria2c = shutil.which("aria2c")
-    if not aria2c:
-        raise RuntimeError(
-            "aria2c not found. Install: apt-get install aria2 / brew install aria2"
-        )
-    cmd = [
-        aria2c,
-        "--dir", dest_dir,
-        "--seed-time=0",          # don't seed after download
-        "--max-connection-per-server=4",
-        "--split=4",
-        "--file-allocation=none",
-        "--console-log-level=warn",
-        "--quiet=true",
-    ]
-    if file_index is not None:
-        cmd.extend(["--select-file", str(file_index)])
-    cmd.append(torrent_path)
-    logger.info("aria2c cmd: %s", " ".join(cmd))
-    result = subprocess.run(cmd, timeout=7200)  # 2h max
-    return result.returncode == 0
 
 
 def _compress_for_telegram(path: str) -> str | None:
