@@ -914,3 +914,18 @@ def rt_pending_for_user(user_id: int) -> list[dict]:
             (str(user_id),),
         ).fetchall()
         return [dict(r) for r in rows]
+
+
+def rt_recent_tasks(limit: int = 20) -> list[dict]:
+    """Return recent RuTracker queue tasks for admin monitoring."""
+    with get_db() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, user_id, chat_id, topic_id, title, file_index, filename, file_size, status, created_at
+            FROM rt_download_queue
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+        return [dict(r) for r in rows]

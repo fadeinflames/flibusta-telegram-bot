@@ -37,6 +37,7 @@ from src.tg_bot import (
     setformat_command,
     setpage_command,
     settings_command,
+    rt_admin_queue,
     show_stats,
     start_callback,
     universal_search,
@@ -114,6 +115,7 @@ def main():
     # ===== АДМИНИСТРАТИВНЫЕ КОМАНДЫ =====
     app.add_handler(CommandHandler("users", list_allowed_users))
     app.add_handler(CommandHandler("stats", show_stats))
+    app.add_handler(CommandHandler("rtqueue", rt_admin_queue))
 
     # ===== ОБРАБОТЧИКИ =====
     app.add_handler(CallbackQueryHandler(button))
@@ -159,6 +161,7 @@ def main():
     print("АДМИН:")
     print("  /users               - список пользователей")
     print("  /stats               - общая статистика")
+    print("  /rtqueue [N]         - очередь RuTracker")
     print()
     print("Подсказка: начните с команды /start")
     print("=" * 50)

@@ -271,6 +271,55 @@ async def list_allowed_users(update: Update, _: CallbackContext) -> None:
         await update.message.reply_text("❌ У вас нет прав для просмотра этой информации.")
 
 
+@check_access
+async def rt_admin_queue(update: Update, context: CallbackContext) -> None:
+    """/rtqueue — RuTracker queue monitor (admin only)."""
+    user_id = str(update.effective_user.id)
+    if not (ADMIN_USER_ID and user_id == ADMIN_USER_ID):
+        await update.message.reply_text("❌ У вас нет прав для просмотра этой информации.")
+        return
+
+    # Optional argument: /rtqueue 50
+    limit = 20
+    if context.args:
+        try:
+            limit = max(1, min(100, int(context.args[0])))
+        except ValueError:
+            limit = 20
+
+    tasks = await db_call(db.rt_recent_tasks, limit)
+    if not tasks:
+        await update.message.reply_text("📭 Очередь RuTracker пока пуста.")
+        return
+
+    icon = {
+        "pending": "🟡",
+        "downloading": "🔵",
+        "done": "✅",
+        "failed": "❌",
+    }
+    lines = [f"🎧 <b>RuTracker очередь (последние {len(tasks)})</b>", ""]
+    for t in tasks:
+        st = t.get("status", "pending")
+        st_i = icon.get(st, "⚪")
+        fname = escape_html((t.get("filename") or "—")[:40])
+        title = escape_html((t.get("title") or "—")[:50])
+        topic_id = t.get("topic_id", "—")
+        created_at = t.get("created_at", 0)
+        lines.append(
+            f"{st_i} <b>#{t.get('id')}</b> · {st}\n"
+            f"👤 user: <code>{t.get('user_id')}</code> · topic: <code>{topic_id}</code>\n"
+            f"📄 {fname}\n"
+            f"📚 {title}\n"
+            f"🕒 ts: <code>{created_at:.0f}</code>\n"
+        )
+
+    text = "\n".join(lines)
+    if len(text) > 4096:
+        text = text[:4092] + "…"
+    await update.message.reply_text(text, parse_mode=ParseMode.HTML)
+
+
 # ════════════════════════════════════════════════════════════
 #                      CALLBACK ROUTER (dispatch table)
 # ════════════════════════════════════════════════════════════
