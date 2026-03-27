@@ -178,6 +178,7 @@ async def handle_rt_auto(
 ) -> None:
     """Поиск аудио по названию книги (кнопка с карточки Flibusta)."""
     import re
+
     from src.tg_bot_helpers import book_from_cache
 
     if not RUTRACKER_USERNAME:
@@ -505,7 +506,7 @@ async def _do_search(query: str, context: CallbackContext) -> list[rutracker.RTo
     loop = asyncio.get_event_loop()
     try:
         return await loop.run_in_executor(None, rutracker.search, query)
-    except Exception as exc:
+    except Exception:
         logger.exception("RuTracker search error: query=%r", query)
         return []
 
@@ -516,7 +517,7 @@ async def _do_topic_files(topic_id: str, context: CallbackContext) -> list[rutra
     loop = asyncio.get_event_loop()
     try:
         return await loop.run_in_executor(None, rutracker.get_topic_files, topic_id)
-    except Exception as exc:
+    except Exception:
         logger.exception("RuTracker file list error: topic=%s", topic_id)
         return []
 

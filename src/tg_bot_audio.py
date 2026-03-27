@@ -158,11 +158,11 @@ async def show_audiobook_card(slug_or_id: str, update: Update, context: Callback
 
     if cached:
         book_id = cached["book_id"]
-        slug = cached["slug"]
+        cached["slug"]
         title = cached["title"]
         author = cached["author"]
         narrator = cached["narrator"] or ""
-        chapters = cached["chapters"]
+        cached["chapters"]
         total = cached["total_chapters"]
     else:
         # Full load from site
@@ -205,11 +205,9 @@ async def show_audiobook_card(slug_or_id: str, update: Update, context: Callback
         )
 
         book_id = book.book_id
-        slug = book.slug
         title = book.title
         author = book.author
         narrator = book.narrator
-        chapters = chapters_dicts
         total = book.total_chapters
 
     # Get user's progress for this book
@@ -280,7 +278,7 @@ async def show_chapters_list(ref: str, page: int, update: Update, context: Callb
     total = cached["total_chapters"]
     title = cached["title"]
     book_id = cached["book_id"]
-    slug = cached["slug"] or book_id
+    cached["slug"] or book_id
     # Use book_id in all callback_data to stay within Telegram's 64-byte limit
     cb_ref = book_id
 

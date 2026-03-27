@@ -11,13 +11,12 @@ from __future__ import annotations
 import asyncio
 import html
 import logging
-import os
 import shutil
 import subprocess
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional, Set
+from typing import TYPE_CHECKING
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
@@ -54,9 +53,9 @@ class DownloadTask:
 class RutrackerDownloader:
     """Singleton background downloader.  Call `start(app)` once at bot startup."""
 
-    _instance: Optional["RutrackerDownloader"] = None
+    _instance: RutrackerDownloader | None = None
 
-    def __new__(cls) -> "RutrackerDownloader":
+    def __new__(cls) -> RutrackerDownloader:
         if cls._instance is None:
             cls._instance = super().__new__(cls)
             cls._instance._initialised = False
@@ -65,15 +64,15 @@ class RutrackerDownloader:
     def __init__(self) -> None:
         if self._initialised:
             return
-        self._app: Optional["Application"] = None
+        self._app: Application | None = None
         self._queue: asyncio.Queue[DownloadTask] = asyncio.Queue()
         self._running = False
-        self._cancelled_ids: Set[int] = set()
-        self._active_task_id: Optional[int] = None
-        self._active_proc: Optional[asyncio.subprocess.Process] = None
+        self._cancelled_ids: set[int] = set()
+        self._active_task_id: int | None = None
+        self._active_proc: asyncio.subprocess.Process | None = None
         self._initialised = True
 
-    def start(self, app: "Application") -> None:
+    def start(self, app: Application) -> None:
         self._app = app
         if not self._running:
             self._running = True
@@ -504,7 +503,7 @@ class RutrackerDownloader:
                 try:
                     await asyncio.wait_for(done.wait(), timeout=2.0)
                     break
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     if task.task_id in self._cancelled_ids:
                         break
             return
@@ -567,7 +566,7 @@ class RutrackerDownloader:
             try:
                 await asyncio.wait_for(done.wait(), timeout=poll_s)
                 break
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 continue
 
     async def _aria2c_download_with_progress(

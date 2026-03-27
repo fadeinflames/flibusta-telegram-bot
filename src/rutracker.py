@@ -5,7 +5,6 @@ import logging
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
 
 import requests
 from bs4 import BeautifulSoup
@@ -24,7 +23,7 @@ _HEADERS = {
 }
 
 # Singleton session — login once, reuse across requests
-_session: Optional[requests.Session] = None
+_session: requests.Session | None = None
 
 _SERIES_PATTERNS = [
     r"\bserial\b",
@@ -126,9 +125,7 @@ def _looks_like_book(title: str) -> bool:
     if any(re.search(pat, text) for pat in _BOOK_PATTERNS):
         return True
     # Typical audiobook title format: "Автор - Название"
-    if " - " in text:
-        return True
-    return False
+    return " - " in text
 
 
 def search(query: str, limit: int = 10) -> list[RTopic]:
