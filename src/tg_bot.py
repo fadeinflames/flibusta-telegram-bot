@@ -31,6 +31,7 @@ from src.tg_bot_audio import (
 from src.tg_bot_rutracker import (
     handle_rt_auto,
     handle_rt_dl,
+    handle_rt_files_page,
     handle_rt_pick,
     handle_rt_page,
 )
@@ -491,6 +492,7 @@ _PREFIX_HANDLERS = [
     ("rt_auto_", handle_rt_auto, False),
     ("rt_dl_", handle_rt_dl, False),
     ("rt_pick_", handle_rt_pick, False),
+    ("rt_files_page_", handle_rt_files_page, True),
     ("rt_page_", handle_rt_page, True),
 ]
 
@@ -506,7 +508,7 @@ async def button(update: Update, context: CallbackContext) -> None:
         await query.answer("Вы на этой странице")
         return
 
-    if data == "ab_noop":
+    if data in ("ab_noop", "rt_noop"):
         await query.answer()
         return
 

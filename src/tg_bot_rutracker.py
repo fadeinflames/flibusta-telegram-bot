@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 # ── helpers ──────────────────────────────────────────────────────────────────
 
 _PAGE_SIZE = 5
+_FILES_PER_PAGE = 10
 _RT_RESULTS_KEY = "rt_search_results"
 _RT_FILES_KEY = "rt_topic_files"
 _TG_AUDIO_LIMIT = 49 * 1024 * 1024
@@ -174,31 +175,7 @@ async def handle_rt_dl(
         "title": title,
         "files": files,
     }
-
-    rows = []
-    lines = [f"🎧 <b>{title}</b>", "", "Выберите главу/файл для скачивания:"]
-    for i, entry in enumerate(files[:20], start=1):
-        size_str = _fmt_bytes(entry.size_bytes)
-        warn = " ⚠️ >49MB" if entry.size_bytes > _TG_AUDIO_LIMIT else ""
-        short_name = entry.filename.rsplit("/", 1)[-1]
-        lines.append(f"{i}. {short_name} — {size_str}{warn}")
-        rows.append(
-            [
-                InlineKeyboardButton(
-                    f"{i}. {short_name[:34]}",
-                    callback_data=f"rt_pick_{entry.index_in_torrent}",
-                )
-            ]
-        )
-    if len(files) > 20:
-        lines.append("")
-        lines.append("Показаны первые 20 файлов.")
-
-    await query.edit_message_text(
-        "\n".join(lines),
-        reply_markup=InlineKeyboardMarkup(rows),
-        parse_mode=ParseMode.HTML,
-    )
+    await _show_rt_topic_files(update, context, page=0, edit=True)
 
 
 async def handle_rt_pick(
@@ -245,6 +222,18 @@ async def handle_rt_pick(
     )
 
 
+async def handle_rt_files_page(
+    data: str, query, update: Update, context: CallbackContext
+) -> None:
+    """Paginate selected topic files."""
+    await query.answer()
+    try:
+        page = int(data[len("rt_files_page_"):])
+    except ValueError:
+        return
+    await _show_rt_topic_files(update, context, page=page, edit=True)
+
+
 async def handle_rt_page(
     data: str, query, update: Update, context: CallbackContext
 ) -> None:
@@ -261,6 +250,57 @@ async def handle_rt_page(
         return
 
     await _show_rt_results(results, query_text, page, update, context, edit=True)
+
+
+async def _show_rt_topic_files(update: Update, context: CallbackContext, page: int, edit: bool = False) -> None:
+    cached = context.user_data.get(_RT_FILES_KEY, {})
+    topic_id = cached.get("topic_id")
+    title = cached.get("title", "RuTracker")
+    files: list[rutracker.FileEntry] = cached.get("files", [])
+    if not topic_id or not files:
+        if update.callback_query:
+            await update.callback_query.edit_message_text("Результаты устарели. Откройте список заново.")
+        return
+
+    total = len(files)
+    total_pages = max(1, (total + _FILES_PER_PAGE - 1) // _FILES_PER_PAGE)
+    page = max(0, min(page, total_pages - 1))
+    start = page * _FILES_PER_PAGE
+    chunk = files[start : start + _FILES_PER_PAGE]
+
+    lines = [
+        f"🎧 <b>{title}</b>",
+        "",
+        f"Выберите главу/файл для скачивания ({total}):",
+        f"Страница {page + 1}/{total_pages}",
+        "",
+    ]
+    rows = []
+    for i, entry in enumerate(chunk, start=start + 1):
+        size_str = _fmt_bytes(entry.size_bytes)
+        warn = " ⚠️ >49MB" if entry.size_bytes > _TG_AUDIO_LIMIT else ""
+        short_name = entry.filename.rsplit("/", 1)[-1]
+        lines.append(f"{i}. {short_name} — {size_str}{warn}")
+        rows.append([InlineKeyboardButton(f"{i}. {short_name[:34]}", callback_data=f"rt_pick_{entry.index_in_torrent}")])
+
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton("◀", callback_data=f"rt_files_page_{page - 1}"))
+    if total_pages > 1:
+        nav.append(InlineKeyboardButton(f"{page + 1}/{total_pages}", callback_data="rt_noop"))
+    if page < total_pages - 1:
+        nav.append(InlineKeyboardButton("▶", callback_data=f"rt_files_page_{page + 1}"))
+    if nav:
+        rows.append(nav)
+
+    text = "\n".join(lines)
+    kb = InlineKeyboardMarkup(rows)
+    if edit and update.callback_query:
+        await update.callback_query.edit_message_text(text, reply_markup=kb, parse_mode=ParseMode.HTML)
+    else:
+        msg = update.message or (update.callback_query and update.callback_query.message)
+        if msg:
+            await msg.reply_text(text, reply_markup=kb, parse_mode=ParseMode.HTML)
 
 
 # ── internal ──────────────────────────────────────────────────────────────────
