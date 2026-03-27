@@ -85,6 +85,16 @@ class RTopicFiles:
     audio_files: list[str] = field(default_factory=list)  # mp3/m4b/flac etc.
 
 
+@dataclass
+class FileEntry:
+    filename: str
+    size_bytes: int
+    index_in_torrent: int
+
+
+_AUDIO_EXTENSIONS = {".mp3", ".m4b", ".m4a", ".ogg", ".flac", ".opus", ".aac", ".wav"}
+
+
 def search(query: str, limit: int = 10) -> list[RTopic]:
     """Search RuTracker audiobook categories.  Returns up to *limit* results."""
     s = get_session()
@@ -166,3 +176,69 @@ def download_torrent(topic_id: str) -> bytes:
         resp = s.get(f"{_BASE}/dl.php?t={topic_id}", timeout=30)
         resp.raise_for_status()
     return resp.content
+
+
+def _bdecode(data: bytes, idx: int = 0):
+    ch = data[idx : idx + 1]
+    if ch == b"i":
+        end = data.index(b"e", idx)
+        return int(data[idx + 1 : end]), end + 1
+    if ch == b"l":
+        idx += 1
+        out = []
+        while data[idx : idx + 1] != b"e":
+            val, idx = _bdecode(data, idx)
+            out.append(val)
+        return out, idx + 1
+    if ch == b"d":
+        idx += 1
+        out = {}
+        while data[idx : idx + 1] != b"e":
+            key, idx = _bdecode(data, idx)
+            val, idx = _bdecode(data, idx)
+            if isinstance(key, bytes):
+                key = key.decode("utf-8", errors="ignore")
+            out[key] = val
+        return out, idx + 1
+    if ch.isdigit():
+        colon = data.index(b":", idx)
+        ln = int(data[idx:colon])
+        start = colon + 1
+        end = start + ln
+        return data[start:end], end
+    raise ValueError("Invalid bencode payload")
+
+
+def get_topic_files(topic_id: str) -> list[FileEntry]:
+    """Return audio files from topic torrent metadata."""
+    torrent = download_torrent(topic_id)
+    root, _ = _bdecode(torrent)
+    info = root.get("info", {}) if isinstance(root, dict) else {}
+    entries: list[FileEntry] = []
+
+    if "files" in info:
+        files = info.get("files") or []
+        for idx, item in enumerate(files, start=1):
+            path_parts = item.get("path", [])
+            parts = []
+            for p in path_parts:
+                if isinstance(p, bytes):
+                    parts.append(p.decode("utf-8", errors="ignore"))
+                else:
+                    parts.append(str(p))
+            name = "/".join(parts).strip("/") or f"file_{idx}"
+            size = int(item.get("length", 0) or 0)
+            entries.append(FileEntry(filename=name, size_bytes=size, index_in_torrent=idx))
+    else:
+        name = info.get("name", b"")
+        if isinstance(name, bytes):
+            name = name.decode("utf-8", errors="ignore")
+        size = int(info.get("length", 0) or 0)
+        entries.append(FileEntry(filename=str(name or "audio"), size_bytes=size, index_in_torrent=1))
+
+    audio_only = []
+    for e in entries:
+        lower = e.filename.lower()
+        if any(lower.endswith(ext) for ext in _AUDIO_EXTENSIONS):
+            audio_only.append(e)
+    return audio_only

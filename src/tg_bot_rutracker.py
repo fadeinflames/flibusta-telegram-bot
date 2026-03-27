@@ -17,11 +17,27 @@ logger = logging.getLogger(__name__)
 
 _PAGE_SIZE = 5
 _RT_RESULTS_KEY = "rt_search_results"
+_RT_FILES_KEY = "rt_topic_files"
+_TG_AUDIO_LIMIT = 49 * 1024 * 1024
 
 
 def _fmt_size(raw: str) -> str:
     """Keep the human-readable size string as-is."""
     return raw
+
+
+def _fmt_bytes(size: int) -> str:
+    if size <= 0:
+        return "?"
+    units = ["B", "KB", "MB", "GB"]
+    val = float(size)
+    for unit in units:
+        if val < 1024.0 or unit == units[-1]:
+            if unit == "B":
+                return f"{int(val)} {unit}"
+            return f"{val:.1f} {unit}"
+        val /= 1024.0
+    return f"{size} B"
 
 
 def _results_text(results: list[rutracker.RTopic], query: str, page: int) -> str:
@@ -136,29 +152,95 @@ async def handle_rt_auto(
 async def handle_rt_dl(
     data: str, query, update: Update, context: CallbackContext
 ) -> None:
-    """User clicked a search result — enqueue download."""
+    """User clicked a search result — show chapter/file picker."""
     topic_id = data[len("rt_dl_"):]
-    await query.answer("Добавляю в очередь…")
+    await query.answer("Читаю список файлов…")
 
     # Find title from cached results
     cached = context.user_data.get(_RT_RESULTS_KEY, {})
     results: list[rutracker.RTopic] = cached.get("results", [])
     title = next((t.title for t in results if t.topic_id == topic_id), f"Топик {topic_id}")
 
-    user = update.effective_user
-    chat = update.effective_chat
+    files = await _do_topic_files(topic_id, context)
+    if not files:
+        await query.edit_message_text(
+            "⚠️ Не удалось получить список аудиофайлов в торренте.\n"
+            "Попробуйте другой релиз.",
+        )
+        return
 
-    # Enqueue
-    downloader.enqueue(
-        user_id=user.id,
-        chat_id=chat.id,
-        topic_id=topic_id,
-        title=title,
-    )
+    context.user_data[_RT_FILES_KEY] = {
+        "topic_id": topic_id,
+        "title": title,
+        "files": files,
+    }
+
+    rows = []
+    lines = [f"🎧 <b>{title}</b>", "", "Выберите главу/файл для скачивания:"]
+    for i, entry in enumerate(files[:20], start=1):
+        size_str = _fmt_bytes(entry.size_bytes)
+        warn = " ⚠️ >49MB" if entry.size_bytes > _TG_AUDIO_LIMIT else ""
+        short_name = entry.filename.rsplit("/", 1)[-1]
+        lines.append(f"{i}. {short_name} — {size_str}{warn}")
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    f"{i}. {short_name[:34]}",
+                    callback_data=f"rt_pick_{entry.index_in_torrent}",
+                )
+            ]
+        )
+    if len(files) > 20:
+        lines.append("")
+        lines.append("Показаны первые 20 файлов.")
 
     await query.edit_message_text(
-        f"⏳ <b>Добавлено в очередь</b>\n\n«{title}»\n\n"
-        "Скачивание займёт некоторое время. Когда скачается — пришлю файлы сюда.",
+        "\n".join(lines),
+        reply_markup=InlineKeyboardMarkup(rows),
+        parse_mode=ParseMode.HTML,
+    )
+
+
+async def handle_rt_pick(
+    data: str, query, update: Update, context: CallbackContext
+) -> None:
+    """Enqueue download for selected file index."""
+    try:
+        file_index = int(data[len("rt_pick_"):])
+    except ValueError:
+        await query.answer("Ошибка выбора файла", show_alert=True)
+        return
+
+    await query.answer("Добавляю в очередь…")
+    cached = context.user_data.get(_RT_FILES_KEY, {})
+    topic_id = cached.get("topic_id")
+    title = cached.get("title", "RuTracker")
+    files: list[rutracker.FileEntry] = cached.get("files", [])
+    if not topic_id or not files:
+        await query.edit_message_text("Результаты устарели. Откройте список заново.")
+        return
+
+    selected = next((f for f in files if f.index_in_torrent == file_index), None)
+    if not selected:
+        await query.edit_message_text("Файл не найден. Откройте список заново.")
+        return
+
+    task_id = downloader.enqueue(
+        user_id=update.effective_user.id,
+        chat_id=update.effective_chat.id,
+        topic_id=topic_id,
+        title=title,
+        file_index=file_index,
+        filename=selected.filename,
+        file_size=selected.size_bytes,
+    )
+    await query.edit_message_text(
+        f"⏳ <b>Добавлено в очередь</b>\n\n"
+        f"Релиз: «{title}»\n"
+        f"Файл: <code>{selected.filename.rsplit('/', 1)[-1]}</code>\n"
+        f"Размер: {_fmt_bytes(selected.size_bytes)}\n"
+        f"Задача: #{task_id}\n\n"
+        "Пришлю аудио, когда загрузится.",
         parse_mode=ParseMode.HTML,
     )
 
@@ -191,4 +273,15 @@ async def _do_search(query: str, context: CallbackContext) -> list[rutracker.RTo
         return await loop.run_in_executor(None, rutracker.search, query)
     except Exception as exc:
         logger.error("RuTracker search error: %s", exc)
+        return []
+
+
+async def _do_topic_files(topic_id: str, context: CallbackContext) -> list[rutracker.FileEntry]:
+    import asyncio
+
+    loop = asyncio.get_event_loop()
+    try:
+        return await loop.run_in_executor(None, rutracker.get_topic_files, topic_id)
+    except Exception as exc:
+        logger.error("RuTracker file list error: %s", exc)
         return []

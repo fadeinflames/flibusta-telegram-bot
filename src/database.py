@@ -748,10 +748,24 @@ def init_audiobook_tables():
                 chat_id     INTEGER NOT NULL,
                 topic_id    TEXT NOT NULL,
                 title       TEXT NOT NULL,
+                file_index  INTEGER,
+                filename    TEXT,
+                file_size   INTEGER DEFAULT 0,
                 status      TEXT NOT NULL DEFAULT 'pending',
                 created_at  REAL NOT NULL
             )
         """)
+
+        # Миграция старой схемы очереди RuTracker
+        for col, col_type in [
+            ("file_index", "INTEGER"),
+            ("filename", "TEXT"),
+            ("file_size", "INTEGER DEFAULT 0"),
+        ]:
+            try:
+                cursor.execute(f"ALTER TABLE rt_download_queue ADD COLUMN {col} {col_type}")
+            except sqlite3.OperationalError:
+                pass
 
         conn.commit()
 
@@ -860,14 +874,22 @@ def get_audiobook_progress(user_id: str, book_id: str) -> dict | None:
 import time as _time
 
 
-def rt_enqueue(user_id: int, chat_id: int, topic_id: str, title: str) -> int:
+def rt_enqueue(
+    user_id: int,
+    chat_id: int,
+    topic_id: str,
+    title: str,
+    file_index: int | None = None,
+    filename: str = "",
+    file_size: int = 0,
+) -> int:
     """Insert a pending download task.  Returns the new row id."""
     with get_db() as conn:
         cur = conn.execute(
             """INSERT INTO rt_download_queue
-               (user_id, chat_id, topic_id, title, status, created_at)
-               VALUES (?, ?, ?, ?, 'pending', ?)""",
-            (str(user_id), chat_id, topic_id, title, _time.time()),
+               (user_id, chat_id, topic_id, title, file_index, filename, file_size, status, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)""",
+            (str(user_id), chat_id, topic_id, title, file_index, filename, file_size, _time.time()),
         )
         conn.commit()
         return cur.lastrowid

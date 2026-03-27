@@ -31,6 +31,7 @@ from src.tg_bot_audio import (
 from src.tg_bot_rutracker import (
     handle_rt_auto,
     handle_rt_dl,
+    handle_rt_pick,
     handle_rt_page,
 )
 from src.tg_bot_download import (  # noqa: F401
@@ -489,6 +490,7 @@ _PREFIX_HANDLERS = [
     # Audiobooks (RuTracker)
     ("rt_auto_", handle_rt_auto, False),
     ("rt_dl_", handle_rt_dl, False),
+    ("rt_pick_", handle_rt_pick, False),
     ("rt_page_", handle_rt_page, True),
 ]
 

@@ -13,7 +13,6 @@ import logging
 import os
 import shutil
 import subprocess
-import tempfile
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -38,6 +37,9 @@ class DownloadTask:
     chat_id: int
     topic_id: str
     title: str
+    file_index: int | None = None
+    filename: str = ""
+    file_size: int = 0
     created_at: float = field(default_factory=time.time)
 
 
@@ -67,15 +69,35 @@ class RutrackerDownloader:
             asyncio.get_event_loop().create_task(self._worker())
             logger.info("RutrackerDownloader: worker started")
 
-    def enqueue(self, user_id: int, chat_id: int, topic_id: str, title: str) -> int:
+    def enqueue(
+        self,
+        user_id: int,
+        chat_id: int,
+        topic_id: str,
+        title: str,
+        file_index: int | None = None,
+        filename: str = "",
+        file_size: int = 0,
+    ) -> int:
         """Add a download to the queue.  Returns the task DB id."""
-        task_id = db.rt_enqueue(user_id, chat_id, topic_id, title)
+        task_id = db.rt_enqueue(
+            user_id,
+            chat_id,
+            topic_id,
+            title,
+            file_index=file_index,
+            filename=filename,
+            file_size=file_size,
+        )
         task = DownloadTask(
             task_id=task_id,
             user_id=user_id,
             chat_id=chat_id,
             topic_id=topic_id,
             title=title,
+            file_index=file_index,
+            filename=filename,
+            file_size=file_size,
         )
         self._queue.put_nowait(task)
         logger.info("Enqueued torrent download: topic=%s user=%s", topic_id, user_id)
@@ -111,14 +133,14 @@ class RutrackerDownloader:
 
         # Run aria2c
         ok = await asyncio.get_event_loop().run_in_executor(
-            None, _aria2c_download, str(torrent_path), str(dest_dir)
+            None, _aria2c_download, str(torrent_path), str(dest_dir), task.file_index
         )
         torrent_path.unlink(missing_ok=True)
 
         if not ok:
             raise RuntimeError("aria2c exited with non-zero code")
 
-        # Collect audio files
+        # Collect audio files (sorted by filename -> chapter order for numbered tracks)
         audio_files = sorted(
             p for p in dest_dir.rglob("*") if p.suffix.lower() in AUDIO_EXTENSIONS
         )
@@ -138,30 +160,38 @@ class RutrackerDownloader:
             return
         bot = self._app.bot
         count = len(audio_files)
-        await self._notify(
-            task.chat_id,
-            f"✅ <b>{task.title}</b>\n\nСкачалось {count} файл(ов). Отправляю...",
-        )
+        await self._notify(task.chat_id, f"✅ <b>{task.title}</b>\n\nСкачалось {count} файл(ов). Отправляю по порядку...")
         for idx, fpath in enumerate(audio_files, 1):
-            size_mb = fpath.stat().st_size / 1024 / 1024
+            send_path = fpath
+            size_mb = send_path.stat().st_size / 1024 / 1024
             if size_mb > 49:
-                await self._notify(
-                    task.chat_id,
-                    f"⚠️ Файл {fpath.name} слишком большой ({size_mb:.0f} МБ), пропускаю",
+                recompressed = await asyncio.get_event_loop().run_in_executor(
+                    None, _compress_for_telegram, str(fpath)
                 )
-                continue
+                if recompressed:
+                    send_path = Path(recompressed)
+                    size_mb = send_path.stat().st_size / 1024 / 1024
+                if size_mb > 49:
+                    await self._notify(
+                        task.chat_id,
+                        f"⚠️ Файл {fpath.name} слишком большой ({size_mb:.0f} МБ), не удалось ужать до лимита",
+                    )
+                    continue
             try:
-                with open(fpath, "rb") as f:
+                with open(send_path, "rb") as f:
                     await bot.send_audio(
                         chat_id=task.chat_id,
                         audio=f,
-                        title=fpath.stem,
-                        filename=fpath.name,
+                        title=send_path.stem,
+                        filename=send_path.name,
                         caption=f"[{idx}/{count}] {task.title}" if count > 1 else None,
                     )
             except Exception as exc:
-                logger.warning("Failed to send %s: %s", fpath.name, exc)
-                await self._notify(task.chat_id, f"⚠️ Не удалось отправить {fpath.name}: {exc}")
+                logger.warning("Failed to send %s: %s", send_path.name, exc)
+                await self._notify(task.chat_id, f"⚠️ Не удалось отправить {send_path.name}: {exc}")
+            finally:
+                if send_path != fpath:
+                    send_path.unlink(missing_ok=True)
 
         # Cleanup
         shutil.rmtree(str(dest_dir_for_cleanup(task.topic_id)), ignore_errors=True)
@@ -181,7 +211,7 @@ def dest_dir_for_cleanup(topic_id: str) -> Path:
     return Path(RUTRACKER_DOWNLOAD_DIR) / topic_id
 
 
-def _aria2c_download(torrent_path: str, dest_dir: str) -> bool:
+def _aria2c_download(torrent_path: str, dest_dir: str, file_index: int | None = None) -> bool:
     """Run aria2c synchronously.  Returns True on success."""
     aria2c = shutil.which("aria2c")
     if not aria2c:
@@ -197,11 +227,40 @@ def _aria2c_download(torrent_path: str, dest_dir: str) -> bool:
         "--file-allocation=none",
         "--console-log-level=warn",
         "--quiet=true",
-        torrent_path,
     ]
+    if file_index is not None:
+        cmd.extend(["--select-file", str(file_index)])
+    cmd.append(torrent_path)
     logger.info("aria2c cmd: %s", " ".join(cmd))
     result = subprocess.run(cmd, timeout=7200)  # 2h max
     return result.returncode == 0
+
+
+def _compress_for_telegram(path: str) -> str | None:
+    """Try to re-encode audio to fit Telegram send_audio limit."""
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        return None
+    src = Path(path)
+    out = src.with_name(f"{src.stem}.tg.mp3")
+    cmd = [
+        ffmpeg,
+        "-y",
+        "-i",
+        str(src),
+        "-vn",
+        "-ac",
+        "1",
+        "-ar",
+        "22050",
+        "-b:a",
+        "56k",
+        str(out),
+    ]
+    result = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=1800)
+    if result.returncode != 0 or not out.exists():
+        return None
+    return str(out)
 
 
 # Module-level singleton
