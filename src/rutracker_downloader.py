@@ -18,7 +18,7 @@ import subprocess
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Optional, Set
 
 from src import database as db
 from src import rutracker
@@ -64,6 +64,9 @@ class RutrackerDownloader:
         self._app: Optional["Application"] = None
         self._queue: asyncio.Queue[DownloadTask] = asyncio.Queue()
         self._running = False
+        self._cancelled_ids: Set[int] = set()
+        self._active_task_id: Optional[int] = None
+        self._active_proc: Optional[asyncio.subprocess.Process] = None
         self._initialised = True
 
     def start(self, app: "Application") -> None:
@@ -120,6 +123,58 @@ class RutrackerDownloader:
         )
         return task_id
 
+    def cancel_task(self, task_id: int) -> tuple[bool, str]:
+        """Mark task as cancelled; kill aria2c if this task is active. Admin-only via bot."""
+        row = db.rt_get_task(task_id)
+        if not row:
+            return False, "Задача не найдена"
+        st = row.get("status", "")
+        if st in ("done", "failed", "cancelled"):
+            return False, f"Задача уже в статусе «{st}»"
+        db.rt_update_status(task_id, "cancelled")
+        self._cancelled_ids.add(task_id)
+        if self._active_task_id == task_id and self._active_proc:
+            try:
+                self._active_proc.terminate()
+            except ProcessLookupError:
+                pass
+            logger.info("rt cancel: terminated aria2c for task_id=%s", task_id)
+        return True, "Отмена запрошена"
+
+    def delete_task_files(self, topic_id: str) -> None:
+        """Remove downloaded data for a topic from disk."""
+        path = dest_dir_for_cleanup(topic_id)
+        shutil.rmtree(str(path), ignore_errors=True)
+        logger.info("rt delete: removed dir %s", path)
+
+    def delete_task(self, task_id: int) -> tuple[bool, str]:
+        """Remove DB row, kill active download, wipe files on disk. Admin-only via bot."""
+        row = db.rt_get_task(task_id)
+        if not row:
+            return False, "Задача не найдена"
+        topic_id = row["topic_id"]
+        self._cancelled_ids.add(task_id)
+        if self._active_task_id == task_id and self._active_proc:
+            try:
+                self._active_proc.terminate()
+            except ProcessLookupError:
+                pass
+            logger.info("rt delete: terminated aria2c for task_id=%s", task_id)
+        db.rt_delete_task(task_id)
+        self.delete_task_files(topic_id)
+        self._cancelled_ids.discard(task_id)
+        return True, "Удалено"
+
+    async def _handle_cancelled_mid_task(self, task: DownloadTask) -> None:
+        self._cancelled_ids.discard(task.task_id)
+        if db.rt_get_task(task.task_id):
+            db.rt_update_status(task.task_id, "cancelled")
+        self.delete_task_files(task.topic_id)
+        await self._notify(
+            task.chat_id,
+            f"⏹️ <b>Задача #{task.task_id} отменена</b>\n«{html.escape(task.title)}»",
+        )
+
     async def _worker(self) -> None:
         while True:
             task = await self._queue.get()
@@ -127,13 +182,29 @@ class RutrackerDownloader:
             try:
                 await self._process(task)
             except Exception as exc:
-                logger.exception("Download task %s failed: %s", task.task_id, exc)
-                db.rt_update_status(task.task_id, "failed")
-                await self._notify(task.chat_id, f"⚠️ Ошибка скачивания «{task.title}»: {exc}")
+                if task.task_id in self._cancelled_ids:
+                    self._cancelled_ids.discard(task.task_id)
+                    logger.info("Download task %s aborted (cancelled)", task.task_id)
+                else:
+                    logger.exception("Download task %s failed: %s", task.task_id, exc)
+                    db.rt_update_status(task.task_id, "failed")
+                    await self._notify(task.chat_id, f"⚠️ Ошибка скачивания «{task.title}»: {exc}")
             finally:
                 self._queue.task_done()
 
     async def _process(self, task: DownloadTask) -> None:
+        row = db.rt_get_task(task.task_id)
+        if not row:
+            logger.info("rt process: task_id=%s missing from DB (deleted), skip", task.task_id)
+            return
+        if row.get("status") == "cancelled" or task.task_id in self._cancelled_ids:
+            self._cancelled_ids.discard(task.task_id)
+            await self._notify(
+                task.chat_id,
+                f"⏹️ <b>Задача #{task.task_id} отменена</b>\n«{html.escape(task.title)}»",
+            )
+            return
+
         started_at = time.time()
         db.rt_update_status(task.task_id, "downloading")
         logger.info(
@@ -168,6 +239,14 @@ class RutrackerDownloader:
         torrent_path = dest_dir / f"{task.topic_id}.torrent"
         torrent_path.write_bytes(torrent_bytes)
 
+        if task.task_id in self._cancelled_ids:
+            await self._handle_cancelled_mid_task(task)
+            return
+        if not db.rt_get_task(task.task_id):
+            self.delete_task_files(task.topic_id)
+            logger.info("rt process: task_id=%s deleted before aria2, skip", task.task_id)
+            return
+
         # Run aria2c
         ok = await self._aria2c_download_with_progress(
             task=task,
@@ -178,6 +257,13 @@ class RutrackerDownloader:
         torrent_path.unlink(missing_ok=True)
 
         if not ok:
+            if not db.rt_get_task(task.task_id):
+                self.delete_task_files(task.topic_id)
+                logger.info("rt process: task_id=%s removed during download", task.task_id)
+                return
+            if task.task_id in self._cancelled_ids:
+                await self._handle_cancelled_mid_task(task)
+                return
             logger.error("rt process: aria2c failed task_id=%s topic=%s", task.task_id, task.topic_id)
             raise RuntimeError("aria2c exited with non-zero code")
 
@@ -216,6 +302,10 @@ class RutrackerDownloader:
         self, task: DownloadTask, audio_files: list[Path]
     ) -> None:
         if self._app is None:
+            return
+        if not db.rt_get_task(task.task_id):
+            logger.info("rt send: task_id=%s removed from DB, skip send", task.task_id)
+            shutil.rmtree(str(dest_dir_for_cleanup(task.topic_id)), ignore_errors=True)
             return
         bot = self._app.bot
         count = len(audio_files)
@@ -333,40 +423,52 @@ class RutrackerDownloader:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
         )
+        self._active_task_id = task.task_id
+        self._active_proc = proc
+        try:
+            progress_re = re.compile(r"\((\d+)%\).*DL:([^\s]+).*ETA:([^\s]+)")
+            last_emit_ts = 0.0
+            last_percent = -1
+            while True:
+                if task.task_id in self._cancelled_ids:
+                    try:
+                        proc.terminate()
+                    except ProcessLookupError:
+                        pass
+                    break
+                line = await proc.stdout.readline() if proc.stdout else b""
+                if not line:
+                    break
+                text = line.decode("utf-8", errors="ignore").strip()
+                if text:
+                    logger.debug("aria2c out task_id=%s: %s", task.task_id, text)
+                match = progress_re.search(text)
+                if not match:
+                    continue
+                percent, speed, eta = int(match.group(1)), match.group(2), match.group(3)
+                now = time.time()
+                if percent != last_percent and now - last_emit_ts >= 1.5:
+                    await self._edit_status(
+                        task.chat_id,
+                        status_message_id,
+                        "📥 <b>Идёт загрузка</b>\n"
+                        f"ID: #{task.task_id}\n"
+                        f"Сиды: {task.seeders}\n"
+                        f"Файл: <code>{html.escape(task.filename or 'не указан')}</code>\n"
+                        f"Прогресс: {percent}%\n"
+                        f"Скорость: {speed}\n"
+                        f"ETA: {eta}",
+                    )
+                    last_emit_ts = now
+                    last_percent = percent
 
-        progress_re = re.compile(r"\((\d+)%\).*DL:([^\s]+).*ETA:([^\s]+)")
-        last_emit_ts = 0.0
-        last_percent = -1
-        while True:
-            line = await proc.stdout.readline() if proc.stdout else b""
-            if not line:
-                break
-            text = line.decode("utf-8", errors="ignore").strip()
-            if text:
-                logger.debug("aria2c out task_id=%s: %s", task.task_id, text)
-            match = progress_re.search(text)
-            if not match:
-                continue
-            percent, speed, eta = int(match.group(1)), match.group(2), match.group(3)
-            now = time.time()
-            if percent != last_percent and now - last_emit_ts >= 1.5:
-                await self._edit_status(
-                    task.chat_id,
-                    status_message_id,
-                    "📥 <b>Идёт загрузка</b>\n"
-                    f"ID: #{task.task_id}\n"
-                    f"Сиды: {task.seeders}\n"
-                    f"Файл: <code>{html.escape(task.filename or 'не указан')}</code>\n"
-                    f"Прогресс: {percent}%\n"
-                    f"Скорость: {speed}\n"
-                    f"ETA: {eta}",
-                )
-                last_emit_ts = now
-                last_percent = percent
-
-        rc = await proc.wait()
-        logger.info("aria2c finished: task_id=%s rc=%s", task.task_id, rc)
-        return rc == 0
+            rc = await proc.wait()
+            logger.info("aria2c finished: task_id=%s rc=%s", task.task_id, rc)
+            return rc == 0
+        finally:
+            if self._active_task_id == task.task_id:
+                self._active_task_id = None
+                self._active_proc = None
 
 
 def dest_dir_for_cleanup(topic_id: str) -> Path:

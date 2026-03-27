@@ -904,6 +904,24 @@ def rt_update_status(task_id: int, status: str) -> None:
         conn.commit()
 
 
+def rt_get_task(task_id: int) -> dict | None:
+    """Return one RuTracker queue row by id."""
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT * FROM rt_download_queue WHERE id = ?",
+            (task_id,),
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def rt_delete_task(task_id: int) -> bool:
+    """Delete a queue row. Returns True if a row was removed."""
+    with get_db() as conn:
+        cur = conn.execute("DELETE FROM rt_download_queue WHERE id = ?", (task_id,))
+        conn.commit()
+        return cur.rowcount > 0
+
+
 def rt_pending_for_user(user_id: int) -> list[dict]:
     """Return tasks that are still pending/downloading for a user."""
     with get_db() as conn:

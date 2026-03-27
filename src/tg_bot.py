@@ -67,6 +67,7 @@ from src.tg_bot_helpers import (  # noqa: F401 — re-exported
 from src.tg_bot_nav import pop_nav as _pop_nav
 from src.tg_bot_nav import push_nav as _push_nav
 from src.tg_bot_presentation import escape_html, shelf_label
+from src.rutracker_downloader import downloader as rt_downloader
 
 # ── Submodule re-exports for srv.py ──
 from src.tg_bot_search import (  # noqa: F401
@@ -297,6 +298,7 @@ async def rt_admin_queue(update: Update, context: CallbackContext) -> None:
         "downloading": "🔵",
         "done": "✅",
         "failed": "❌",
+        "cancelled": "⏹️",
     }
     lines = [f"🎧 <b>RuTracker очередь (последние {len(tasks)})</b>", ""]
     for t in tasks:
@@ -318,6 +320,52 @@ async def rt_admin_queue(update: Update, context: CallbackContext) -> None:
     if len(text) > 4096:
         text = text[:4092] + "…"
     await update.message.reply_text(text, parse_mode=ParseMode.HTML)
+
+
+@check_access
+async def rt_admin_stop(update: Update, context: CallbackContext) -> None:
+    """/rtstop <id> — отменить задачу RuTracker (admin only)."""
+    user_id = str(update.effective_user.id)
+    if not (ADMIN_USER_ID and user_id == ADMIN_USER_ID):
+        await update.message.reply_text("❌ У вас нет прав для этой команды.")
+        return
+    if not context.args:
+        await update.message.reply_text(
+            "Использование: <code>/rtstop &lt;id&gt;</code>\n"
+            "ID смотри в <code>/rtqueue</code>.",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+    try:
+        task_id = int(context.args[0])
+    except ValueError:
+        await update.message.reply_text("❌ Некорректный ID задачи.")
+        return
+    ok, msg = rt_downloader.cancel_task(task_id)
+    await update.message.reply_text(f"{'✅' if ok else '❌'} {msg}")
+
+
+@check_access
+async def rt_admin_delete(update: Update, context: CallbackContext) -> None:
+    """/rtdel <id> — удалить задачу из очереди и файлы на диске (admin only)."""
+    user_id = str(update.effective_user.id)
+    if not (ADMIN_USER_ID and user_id == ADMIN_USER_ID):
+        await update.message.reply_text("❌ У вас нет прав для этой команды.")
+        return
+    if not context.args:
+        await update.message.reply_text(
+            "Использование: <code>/rtdel &lt;id&gt;</code>\n"
+            "ID смотри в <code>/rtqueue</code>.",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+    try:
+        task_id = int(context.args[0])
+    except ValueError:
+        await update.message.reply_text("❌ Некорректный ID задачи.")
+        return
+    ok, msg = rt_downloader.delete_task(task_id)
+    await update.message.reply_text(f"{'✅' if ok else '❌'} {msg}")
 
 
 # ════════════════════════════════════════════════════════════
