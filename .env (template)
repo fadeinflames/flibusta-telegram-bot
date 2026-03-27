@@ -1,6 +1,6 @@
 TOKEN='0123456789:abracadabra'
 
 # RuTracker (аудиокниги)
-RUTRACKER_USERNAME='ssdq'
-RUTRACKER_PASSWORD='123'
+RUTRACKER_USERNAME=''
+RUTRACKER_PASSWORD=''
 # RUTRACKER_DOWNLOAD_DIR='/srv/downloads'  # по умолчанию ./downloads рядом с проектом
