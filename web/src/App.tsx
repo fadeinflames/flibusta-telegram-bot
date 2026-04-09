@@ -41,17 +41,14 @@ function Layout() {
   const isDetailPage = location.pathname.startsWith('/book/') || location.pathname.startsWith('/audiobook/')
 
   return (
-    <div className="h-full flex flex-col bg-tg-bg">
-      <div className="flex-1 min-h-0 relative">
-        <div className="absolute inset-0">
-          <Outlet />
-        </div>
-      </div>
+    <div className="h-full bg-tg-bg">
+      {/* Page content takes full height, page-scroll handles its own padding-bottom */}
+      <Outlet />
       {!isDetailPage && (
-        <>
+        <div className="fixed bottom-0 left-0 right-0 z-40">
           <MiniPlayer onExpand={() => setPlayerOpen(true)} />
           <BottomNav />
-        </>
+        </div>
       )}
       <AudioPlayer open={playerOpen} onClose={() => setPlayerOpen(false)} />
     </div>

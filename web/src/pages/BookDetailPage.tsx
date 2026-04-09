@@ -94,7 +94,7 @@ export default function BookDetailPage() {
         animate="animate"
         exit="exit"
         transition={detailTransition}
-        className="h-full"
+        className="h-full flex flex-col"
         style={{ backgroundColor: 'var(--tg-theme-bg-color, #fff)' }}
       >
         <div className="page-scroll" style={{ paddingBottom: 0 }}>
@@ -149,7 +149,7 @@ export default function BookDetailPage() {
       animate="animate"
       exit="exit"
       transition={detailTransition}
-      className="h-full"
+      className="h-full flex flex-col"
       style={{ backgroundColor: 'var(--tg-theme-bg-color, #fff)' }}
     >
       <div className="page-scroll" style={{ paddingBottom: '32px' }}>
