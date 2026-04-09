@@ -33,6 +33,8 @@ services:
       context: .
       dockerfile: Dockerfile
       target: web
+      args:
+        VITE_BOT_USERNAME: ${BOT_USERNAME:-}
     restart: always
     env_file:
       - .env

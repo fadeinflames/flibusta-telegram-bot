@@ -7,3 +7,5 @@ RUTRACKER_PASSWORD=''
 
 # Web API
 # WEB_PORT=8000  # порт, на котором будет доступен веб-интерфейс (по умолчанию 8000)
+BOT_USERNAME=''  # username бота без @ (для Telegram Login Widget)
+# JWT_SECRET=''  # секрет для JWT-токенов (по умолчанию dev-secret-change-me)

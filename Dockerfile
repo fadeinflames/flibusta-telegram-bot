@@ -28,6 +28,9 @@ VOLUME ["/srv/books", "/srv/logs", "/srv/data", "/srv/downloads"]
 # ── Stage: frontend build ──
 FROM node:20-alpine AS frontend
 
+ARG VITE_BOT_USERNAME
+ENV VITE_BOT_USERNAME=${VITE_BOT_USERNAME}
+
 WORKDIR /build
 COPY web/package.json web/package-lock.json* ./
 RUN npm ci --ignore-scripts
