@@ -191,15 +191,31 @@ function escapeHtml(text: string): string {
 const FONT_SIZES = [14, 16, 18, 20, 22, 24]
 const STORAGE_KEY = 'fb2_reader_settings'
 
-function loadSettings(): { fontSize: number; progress: Record<string, number> } {
+interface ReadingPosition {
+  chapter: number
+  scrollPercent: number
+}
+
+function loadSettings(): { fontSize: number; progress: Record<string, ReadingPosition> } {
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
-    if (raw) return JSON.parse(raw)
+    if (raw) {
+      const parsed = JSON.parse(raw)
+      // Migrate old format (number -> ReadingPosition)
+      if (parsed.progress) {
+        for (const key of Object.keys(parsed.progress)) {
+          if (typeof parsed.progress[key] === 'number') {
+            parsed.progress[key] = { chapter: parsed.progress[key], scrollPercent: 0 }
+          }
+        }
+      }
+      return parsed
+    }
   } catch { /* ignore */ }
   return { fontSize: 18, progress: {} }
 }
 
-function saveSettings(settings: { fontSize: number; progress: Record<string, number> }) {
+function saveSettings(settings: { fontSize: number; progress: Record<string, ReadingPosition> }) {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(settings))
   } catch { /* ignore */ }
@@ -217,6 +233,7 @@ export default function BookReaderPage() {
   const [showControls, setShowControls] = useState(true)
   const [showToc, setShowToc] = useState(false)
   const contentRef = useRef<HTMLDivElement>(null)
+  const restoredRef = useRef(false)
 
   // Fetch book metadata for title
   const book = useQuery<BookDetail>({
@@ -244,29 +261,75 @@ export default function BookReaderPage() {
     }
   }, [content.data])
 
-  // Restore reading progress
+  // Restore reading progress (runs once when fb2 loads)
   useEffect(() => {
-    if (fb2 && id) {
+    if (fb2 && id && !restoredRef.current) {
+      restoredRef.current = true
       const saved = settings.progress[id]
-      if (saved !== undefined && saved < fb2.chapters.length) {
-        setCurrentChapter(saved)
+      if (saved && saved.chapter < fb2.chapters.length) {
+        setCurrentChapter(saved.chapter)
+        // Restore scroll position after render
+        if (saved.scrollPercent > 0) {
+          requestAnimationFrame(() => {
+            setTimeout(() => {
+              const el = contentRef.current
+              if (el) {
+                const scrollMax = el.scrollHeight - el.clientHeight
+                el.scrollTo(0, scrollMax * saved.scrollPercent)
+              }
+            }, 100)
+          })
+        }
       }
     }
   }, [fb2, id, settings])
 
-  // Save progress on chapter change
+  // Save progress on chapter change (only after restore)
   useEffect(() => {
-    if (id && fb2) {
+    if (id && fb2 && restoredRef.current) {
+      const el = contentRef.current
+      const scrollMax = el ? el.scrollHeight - el.clientHeight : 0
+      const scrollPercent = el && scrollMax > 0 ? el.scrollTop / scrollMax : 0
+
       const s = loadSettings()
-      s.progress[id] = currentChapter
+      s.progress[id] = { chapter: currentChapter, scrollPercent }
       s.fontSize = fontSize
       saveSettings(s)
     }
   }, [currentChapter, fontSize, id, fb2])
 
-  // Scroll to top on chapter change
+  // Save scroll position periodically
   useEffect(() => {
-    contentRef.current?.scrollTo(0, 0)
+    const el = contentRef.current
+    if (!el || !id || !fb2) return
+
+    let saveTimer: ReturnType<typeof setTimeout>
+    const handleScroll = () => {
+      clearTimeout(saveTimer)
+      saveTimer = setTimeout(() => {
+        if (!restoredRef.current) return
+        const scrollMax = el.scrollHeight - el.clientHeight
+        const scrollPercent = scrollMax > 0 ? el.scrollTop / scrollMax : 0
+        const s = loadSettings()
+        s.progress[id] = { chapter: currentChapter, scrollPercent }
+        saveSettings(s)
+      }, 500)
+    }
+
+    el.addEventListener('scroll', handleScroll, { passive: true })
+    return () => {
+      clearTimeout(saveTimer)
+      el.removeEventListener('scroll', handleScroll)
+    }
+  }, [id, fb2, currentChapter])
+
+  // Scroll to top on chapter change (but not on initial restore)
+  const chapterChangeRef = useRef(false)
+  useEffect(() => {
+    if (chapterChangeRef.current) {
+      contentRef.current?.scrollTo(0, 0)
+    }
+    chapterChangeRef.current = true
   }, [currentChapter])
 
   const handleFontSize = (delta: number) => {
