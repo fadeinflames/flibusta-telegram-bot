@@ -22,7 +22,7 @@ router = APIRouter(prefix="/api/audiobooks", tags=["audiobooks"])
 
 
 @router.get("/search")
-async def search_audiobooks(q: str, limit: int = 15, user: CurrentUser):
+async def search_audiobooks(q: str, user: CurrentUser, limit: int = 15):
     """Search RuTracker audiobook categories."""
     if len(q.strip()) < 2:
         raise HTTPException(400, "Query too short")
