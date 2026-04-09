@@ -8,7 +8,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from api.routers import audiobooks, books, downloads, library, profile, search
+from api.routers import auth_router, audiobooks, books, downloads, library, profile, search
 from src import database as db
 
 
@@ -30,6 +30,7 @@ app.add_middleware(
 )
 
 # API routers
+app.include_router(auth_router.router)
 app.include_router(library.router)
 app.include_router(search.router)
 app.include_router(books.router)

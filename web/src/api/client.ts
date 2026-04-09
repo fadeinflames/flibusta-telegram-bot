@@ -1,22 +1,41 @@
 const BASE_URL = ''
+const TOKEN_KEY = 'flib_token'
+const USER_KEY = 'flib_user'
 
-function getInitData(): string {
-  try {
-    return window.Telegram?.WebApp?.initData || ''
-  } catch {
-    return ''
-  }
+// ── Auth helpers ──
+
+export function getStoredToken(): string | null {
+  try { return localStorage.getItem(TOKEN_KEY) } catch { return null }
 }
 
+export function getStoredUser(): Record<string, unknown> | null {
+  try {
+    const raw = localStorage.getItem(USER_KEY)
+    return raw ? JSON.parse(raw) : null
+  } catch { return null }
+}
+
+export function storeAuth(token: string, user: Record<string, unknown>) {
+  localStorage.setItem(TOKEN_KEY, token)
+  localStorage.setItem(USER_KEY, JSON.stringify(user))
+}
+
+export function clearAuth() {
+  localStorage.removeItem(TOKEN_KEY)
+  localStorage.removeItem(USER_KEY)
+}
+
+// ── API request ──
+
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
-  const initData = getInitData()
+  const token = getStoredToken()
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     ...(options.headers as Record<string, string>),
   }
 
-  if (initData) {
-    headers['Authorization'] = `tma ${initData}`
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`
   }
 
   const res = await fetch(`${BASE_URL}${path}`, {
@@ -24,12 +43,33 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     headers,
   })
 
+  if (res.status === 401) {
+    clearAuth()
+    throw new Error('AUTH_EXPIRED')
+  }
+
   if (!res.ok) {
     throw new Error(`API error: ${res.status}`)
   }
 
   return res.json()
 }
+
+// ── Auth API (no token needed) ──
+
+export async function loginWithInitData(initData: string): Promise<{ access_token: string; user: Record<string, unknown> }> {
+  const res = await fetch(`${BASE_URL}/api/auth/telegram-webapp`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ init_data: initData }),
+  })
+  if (!res.ok) {
+    throw new Error(`Auth failed: ${res.status}`)
+  }
+  return res.json()
+}
+
+// ── Typed API ──
 
 export const api = {
   // Library
@@ -65,8 +105,10 @@ export const api = {
   getRelatedBooks: (bookId: string) =>
     request(`/api/books/${bookId}/related`),
 
-  getDownloadUrl: (bookId: string, format: string) =>
-    `/api/books/${bookId}/download/${format}`,
+  getDownloadUrl: (bookId: string, format: string) => {
+    const token = getStoredToken()
+    return `/api/books/${bookId}/download/${format}${token ? `?token=${encodeURIComponent(token)}` : ''}`
+  },
 
   // Downloads
   getDownloads: (page = 1) =>

@@ -1,4 +1,4 @@
-"""Telegram WebApp initData validation (HMAC-SHA256)."""
+"""Telegram WebApp initData validation (HMAC-SHA256) + JWT."""
 
 import hashlib
 import hmac
@@ -6,6 +6,20 @@ import json
 import os
 import time
 import urllib.parse
+from datetime import datetime, timedelta, timezone
+
+from jose import jwt
+
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_DAYS = 30
+
+
+def get_jwt_secret() -> str:
+    return os.getenv("JWT_SECRET", "dev-secret-change-me")
+
+
+def get_bot_token() -> str:
+    return os.getenv("TOKEN", "")
 
 
 def validate_init_data(init_data: str, bot_token: str | None = None, max_age: int = 86400) -> dict | None:
@@ -17,7 +31,7 @@ def validate_init_data(init_data: str, bot_token: str | None = None, max_age: in
     if not init_data:
         return None
 
-    token = bot_token or os.getenv("TOKEN", "")
+    token = bot_token or get_bot_token()
     if not token:
         return None
 
@@ -43,7 +57,6 @@ def validate_init_data(init_data: str, bot_token: str | None = None, max_age: in
         return None
 
     # Build data-check-string: sorted key=value pairs joined with \n
-    # Each value is the first element (parse_qs returns lists)
     data_check_parts = []
     for key in sorted(parsed.keys()):
         val = parsed[key][0]
@@ -72,3 +85,33 @@ def validate_init_data(init_data: str, bot_token: str | None = None, max_age: in
         "auth_date": auth_date,
         "query_id": parsed.get("query_id", [None])[0],
     }
+
+
+def create_access_token(user: dict) -> str:
+    """Create JWT token for an authenticated Telegram user."""
+    expire = datetime.now(timezone.utc) + timedelta(days=ACCESS_TOKEN_EXPIRE_DAYS)
+    payload = {
+        "sub": str(user["id"]),
+        "first_name": user.get("first_name", ""),
+        "username": user.get("username"),
+        "photo_url": user.get("photo_url"),
+        "exp": expire,
+    }
+    return jwt.encode(payload, get_jwt_secret(), algorithm=ALGORITHM)
+
+
+def decode_access_token(token: str) -> dict | None:
+    """Decode and validate JWT token. Returns user dict or None."""
+    try:
+        payload = jwt.decode(token, get_jwt_secret(), algorithms=[ALGORITHM])
+        user_id_str = payload.get("sub")
+        if not user_id_str:
+            return None
+        return {
+            "id": int(user_id_str),
+            "first_name": payload.get("first_name", ""),
+            "username": payload.get("username"),
+            "photo_url": payload.get("photo_url"),
+        }
+    except Exception:
+        return None

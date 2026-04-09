@@ -2,9 +2,10 @@
 
 import asyncio
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
+from api.auth import decode_access_token
 from api.deps import CurrentUser
 from api.schemas import BookBrief, BookDetail
 from src import database as db
@@ -61,7 +62,11 @@ async def get_book(book_id: str, user: CurrentUser):
 
 
 @router.get("/{book_id}/download/{fmt}")
-async def download_book(book_id: str, fmt: str, user: CurrentUser):
+async def download_book(book_id: str, fmt: str, token: str = Query(...)):
+    """Download book file. Auth via query param `token` (JWT)."""
+    user = decode_access_token(token)
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
     book = await _get_book(book_id)
     if not book:
         raise HTTPException(status_code=404, detail="Book not found")
