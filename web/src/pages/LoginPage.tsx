@@ -1,5 +1,16 @@
-import { useState, useEffect, useRef, useMemo } from 'react'
-import { loginWithInitData, storeAuth } from '../api/client'
+/**
+ * LoginPage — mirrors time_jedi_bot/web/frontend/src/pages/LoginPage.tsx
+ *
+ * Two auth paths:
+ * 1. Inside Telegram Mini App → auto-login via initData
+ * 2. Browser → Telegram Login Widget
+ */
+
+import { useEffect, useRef, useState, useMemo, useCallback } from 'react'
+import { useNavigate, useLocation } from 'react-router-dom'
+import { useAuth } from '../store/auth'
+import { loginWithInitData, loginWithWidget } from '../api/client'
+import type { AuthUser } from '../store/auth'
 
 const BOT_USERNAME = 'flibusta_rebot'
 
@@ -47,55 +58,57 @@ function StarField() {
   )
 }
 
-interface LoginPageProps {
-  onLogin: (token: string, user: Record<string, unknown>) => void
-  autoLoginError?: string | null
-}
+export default function LoginPage() {
+  const { login } = useAuth()
+  const navigate = useNavigate()
+  const location = useLocation()
 
-export default function LoginPage({ onLogin, autoLoginError }: LoginPageProps) {
+  const postLoginPath = useCallback(() => {
+    const from = (location.state as { from?: string } | null)?.from
+    if (from && from !== '/login') return from
+    return '/'
+  }, [location.state])
+
   const containerRef = useRef<HTMLDivElement>(null)
-  const [error, setError] = useState<string | null>(autoLoginError || null)
+  const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
+  const [autoAuthTried, setAutoAuthTried] = useState(false)
   const [widgetLoading, setWidgetLoading] = useState(false)
   const [widgetFailed, setWidgetFailed] = useState(false)
   const [widgetReloadKey, setWidgetReloadKey] = useState(0)
 
-  // Try auto-login with initData (inside Telegram)
+  // 1. Auto-login via Telegram Mini App initData
   useEffect(() => {
+    if (autoAuthTried) return
+    setAutoAuthTried(true)
+
     const initData = window.Telegram?.WebApp?.initData
     if (!initData) return
 
     setLoading(true)
+    setError(null)
     loginWithInitData(initData)
       .then(({ access_token, user }) => {
-        storeAuth(access_token, user)
-        onLogin(access_token, user)
+        login(access_token, user as unknown as AuthUser)
+        navigate(postLoginPath(), { replace: true })
       })
-      .catch((err) => {
-        setError(err.message || 'Не удалось авторизоваться через Telegram Mini App.')
-        setLoading(false)
+      .catch((err: unknown) => {
+        setError((err as Error).message || 'Не удалось авторизоваться через Telegram Mini App.')
       })
-  }, [onLogin])
+      .finally(() => setLoading(false))
+  }, [autoAuthTried, login, navigate, postLoginPath])
 
-  // Load Telegram Login Widget (outside Telegram)
+  // 2. Telegram Login Widget (browser fallback)
   useEffect(() => {
     ;(window as unknown as Record<string, unknown>).onTelegramAuth = async (userData: TelegramAuthData) => {
       setError(null)
       setLoading(true)
       try {
-        // Send widget data to our backend
-        const res = await fetch('/api/auth/telegram-widget', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(userData),
-        })
-        if (!res.ok) throw new Error(`Auth failed: ${res.status}`)
-        const data = await res.json()
-        storeAuth(data.access_token, data.user)
-        onLogin(data.access_token, data.user)
+        const { access_token, user } = await loginWithWidget(userData as unknown as Record<string, unknown>)
+        login(access_token, user as unknown as AuthUser)
+        navigate(postLoginPath(), { replace: true })
       } catch (err: unknown) {
-        const msg = (err as Error).message || 'Ошибка авторизации'
-        setError(msg)
+        setError((err as Error).message || 'Ошибка авторизации.')
       } finally {
         setLoading(false)
       }
@@ -105,8 +118,6 @@ export default function LoginPage({ onLogin, autoLoginError }: LoginPageProps) {
 
     const hasWebAppInitData = Boolean(window.Telegram?.WebApp?.initData)
     if (hasWebAppInitData) {
-      setWidgetLoading(false)
-      setWidgetFailed(false)
       containerRef.current.innerHTML = ''
       return
     }
@@ -121,10 +132,7 @@ export default function LoginPage({ onLogin, autoLoginError }: LoginPageProps) {
     script.setAttribute('data-size', 'large')
     script.setAttribute('data-onauth', 'onTelegramAuth(user)')
     script.setAttribute('data-request-access', 'write')
-    script.onerror = () => {
-      setWidgetFailed(true)
-      setWidgetLoading(false)
-    }
+    script.onerror = () => { setWidgetFailed(true); setWidgetLoading(false) }
     script.onload = () => {
       window.setTimeout(() => {
         const hasWidget = Boolean(containerRef.current?.childElementCount)
@@ -144,21 +152,19 @@ export default function LoginPage({ onLogin, autoLoginError }: LoginPageProps) {
       delete (window as unknown as Record<string, unknown>).onTelegramAuth
       window.clearTimeout(timeoutId)
     }
-  }, [onLogin, widgetReloadKey])
+  }, [login, navigate, postLoginPath, widgetReloadKey])
 
   return (
     <div className="h-full flex items-center justify-center relative overflow-hidden"
       style={{ background: 'linear-gradient(160deg, #0a0e27 0%, #1a1040 40%, #0d1b2a 100%)' }}>
       <StarField />
 
-      {/* Gradient orbs */}
       <div className="absolute top-1/4 -left-32 w-80 h-80 rounded-full opacity-30 blur-[80px] pointer-events-none"
         style={{ background: 'radial-gradient(circle, #6366f1, transparent)' }} />
       <div className="absolute bottom-1/4 -right-32 w-80 h-80 rounded-full opacity-20 blur-[80px] pointer-events-none"
         style={{ background: 'radial-gradient(circle, #06b6d4, transparent)' }} />
 
       <div className="relative z-10 w-full max-w-sm mx-4">
-        {/* Card */}
         <div className="rounded-2xl p-px"
           style={{ background: 'linear-gradient(135deg, rgba(99,102,241,0.4), rgba(6,182,212,0.2), rgba(99,102,241,0.1))' }}>
           <div className="rounded-2xl p-8"
@@ -171,10 +177,7 @@ export default function LoginPage({ onLogin, autoLoginError }: LoginPageProps) {
             {/* Icon */}
             <div className="flex justify-center mb-5">
               <div className="w-16 h-16 rounded-2xl flex items-center justify-center"
-                style={{
-                  background: 'linear-gradient(135deg, #6366f1, #06b6d4)',
-                  boxShadow: '0 0 30px rgba(99,102,241,0.4)',
-                }}>
+                style={{ background: 'linear-gradient(135deg, #6366f1, #06b6d4)', boxShadow: '0 0 30px rgba(99,102,241,0.4)' }}>
                 <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M4 19.5A2.5 2.5 0 016.5 17H20" />
                   <path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z" />
@@ -188,7 +191,6 @@ export default function LoginPage({ onLogin, autoLoginError }: LoginPageProps) {
               Книги и аудиокниги
             </p>
 
-            {/* Features */}
             <ul className="space-y-3 mt-6 mb-6">
               {[
                 { icon: '🔍', text: 'Поиск книг по названию и автору' },
@@ -198,10 +200,7 @@ export default function LoginPage({ onLogin, autoLoginError }: LoginPageProps) {
               ].map(({ icon, text }) => (
                 <li key={text} className="flex items-center gap-3 text-sm text-violet-100/70">
                   <span className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl text-lg"
-                    style={{
-                      background: 'rgba(99,102,241,0.1)',
-                      border: '1px solid rgba(99,102,241,0.15)',
-                    }}>
+                    style={{ background: 'rgba(99,102,241,0.1)', border: '1px solid rgba(99,102,241,0.15)' }}>
                     {icon}
                   </span>
                   <span>{text}</span>
@@ -209,7 +208,6 @@ export default function LoginPage({ onLogin, autoLoginError }: LoginPageProps) {
               ))}
             </ul>
 
-            {/* Divider */}
             <div className="relative py-1 mb-5">
               <div className="absolute inset-x-0 top-1/2 border-t border-indigo-300/15" />
               <div className="relative flex justify-center">
@@ -220,7 +218,6 @@ export default function LoginPage({ onLogin, autoLoginError }: LoginPageProps) {
               </div>
             </div>
 
-            {/* Telegram Widget container */}
             <div ref={containerRef} className="flex justify-center min-h-[44px]" />
 
             {widgetLoading && (
@@ -235,16 +232,12 @@ export default function LoginPage({ onLogin, autoLoginError }: LoginPageProps) {
                   Виджет не загрузился. Попробуйте ещё раз или откройте через бота.
                 </p>
                 <div className="mt-2 flex items-center justify-center gap-2">
-                  <button
-                    onClick={() => setWidgetReloadKey(k => k + 1)}
-                    className="px-3 py-1.5 rounded-lg text-xs font-medium text-violet-200/80 hover:text-white transition-colors"
+                  <button onClick={() => setWidgetReloadKey(k => k + 1)}
+                    className="px-3 py-1.5 rounded-lg text-xs font-medium text-violet-200/80"
                     style={{ background: 'rgba(99,102,241,0.15)' }}>
                     Повторить
                   </button>
-                  <a
-                    href={`https://t.me/${BOT_USERNAME}`}
-                    target="_blank"
-                    rel="noreferrer"
+                  <a href={`https://t.me/${BOT_USERNAME}`} target="_blank" rel="noreferrer"
                     className="px-3 py-1.5 rounded-lg text-xs font-medium text-white"
                     style={{ background: 'linear-gradient(135deg, #6366f1, #06b6d4)' }}>
                     Открыть бота
@@ -254,9 +247,7 @@ export default function LoginPage({ onLogin, autoLoginError }: LoginPageProps) {
             )}
 
             {loading && (
-              <p className="text-xs text-indigo-300 text-center mt-3 animate-pulse">
-                Выполняется вход...
-              </p>
+              <p className="text-xs text-indigo-300 text-center mt-3 animate-pulse">Выполняется вход...</p>
             )}
 
             {error && (
@@ -269,8 +260,7 @@ export default function LoginPage({ onLogin, autoLoginError }: LoginPageProps) {
 
         <p className="text-center text-xs text-violet-100/25 mt-5 px-4">
           Авторизация через официальный Telegram Login Widget.
-          <br />
-          Мы не храним пароли и не публикуем записи.
+          <br />Мы не храним пароли и не публикуем записи.
         </p>
       </div>
     </div>

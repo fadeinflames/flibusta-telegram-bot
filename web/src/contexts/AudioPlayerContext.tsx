@@ -1,6 +1,6 @@
 import { createContext, useContext, useState, useRef, useCallback, useEffect } from 'react'
 import type { ReactNode } from 'react'
-import { api, getStoredToken } from '../api/client'
+import { api, getStreamUrl } from '../api/client'
 
 interface Track {
   topicId: string
@@ -107,8 +107,7 @@ export function AudioPlayerProvider({ children }: { children: ReactNode }) {
     const audio = audioRef.current
     if (!audio) return
 
-    const token = getStoredToken() || ''
-    const url = `/api/audiobooks/${track.topicId}/stream/${track.fileIndex}?token=${encodeURIComponent(token)}`
+    const url = getStreamUrl(track.topicId, track.fileIndex)
     audio.src = url
     audio.playbackRate = playbackRate
     audio.play().catch(() => {})

@@ -1,6 +1,8 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { motion } from 'framer-motion'
-import { api, getStoredUser, clearAuth } from '../api/client'
+import { useNavigate } from 'react-router-dom'
+import { api } from '../api/client'
+import { useAuth } from '../store/auth'
 import { useHaptic } from '../hooks/useTelegram'
 import type { UserProfile } from '../api/types'
 
@@ -8,13 +10,13 @@ const FORMAT_OPTIONS = ['fb2', 'epub', 'mobi', 'pdf', 'djvu']
 
 export default function ProfilePage() {
   const queryClient = useQueryClient()
+  const navigate = useNavigate()
+  const { user, logout } = useAuth()
   const { selection, notification } = useHaptic()
-  const storedUser = getStoredUser()
   const tgUser = {
-    first_name: (storedUser?.first_name as string) || '',
-    last_name: (storedUser?.last_name as string) || '',
-    username: (storedUser?.username as string) || '',
-    photo_url: (storedUser?.photo_url as string) || '',
+    first_name: user?.first_name || '',
+    username: user?.username || '',
+    photo_url: user?.photo_url || '',
   }
 
   const profile = useQuery<UserProfile>({
@@ -36,8 +38,8 @@ export default function ProfilePage() {
   })
 
   const handleLogout = () => {
-    clearAuth()
-    window.location.reload()
+    logout()
+    navigate('/login', { replace: true })
   }
 
   const p = profile.data
@@ -66,7 +68,7 @@ export default function ProfilePage() {
             )}
           </motion.div>
           <h1 className="text-[22px] font-bold" style={{ color: 'var(--tg-theme-text-color, #000)' }}>
-            {tgUser.first_name} {tgUser.last_name}
+            {tgUser.first_name}
           </h1>
           {tgUser.username && (
             <p className="text-[14px] mt-0.5" style={{ color: 'var(--tg-theme-hint-color, #999)' }}>

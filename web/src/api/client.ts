@@ -1,34 +1,27 @@
-const BASE_URL = ''
+/**
+ * API client — mirrors time_jedi_bot/web/frontend/src/api/client.ts
+ *
+ * - All requests go through a single `request()` helper
+ * - Bearer token injected from localStorage
+ * - 401 triggers session-lost broadcast → AuthProvider catches and redirects
+ */
+
+import { broadcastSessionLost } from '../lib/authSession'
+
 const TOKEN_KEY = 'flib_token'
-const USER_KEY = 'flib_user'
 
-// ── Auth helpers ──
-
-export function getStoredToken(): string | null {
-  try { return localStorage.getItem(TOKEN_KEY) } catch { return null }
-}
-
-export function getStoredUser(): Record<string, unknown> | null {
+function getToken(): string | null {
   try {
-    const raw = localStorage.getItem(USER_KEY)
-    return raw ? JSON.parse(raw) : null
-  } catch { return null }
+    return localStorage.getItem(TOKEN_KEY)
+  } catch {
+    return null
+  }
 }
 
-export function storeAuth(token: string, user: Record<string, unknown>) {
-  localStorage.setItem(TOKEN_KEY, token)
-  localStorage.setItem(USER_KEY, JSON.stringify(user))
-}
-
-export function clearAuth() {
-  localStorage.removeItem(TOKEN_KEY)
-  localStorage.removeItem(USER_KEY)
-}
-
-// ── API request ──
+// ── Core request helper ──
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
-  const token = getStoredToken()
+  const token = getToken()
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     ...(options.headers as Record<string, string>),
@@ -38,38 +31,48 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     headers['Authorization'] = `Bearer ${token}`
   }
 
-  const res = await fetch(`${BASE_URL}${path}`, {
-    ...options,
-    headers,
-  })
+  const res = await fetch(path, { ...options, headers })
 
   if (res.status === 401) {
-    clearAuth()
+    broadcastSessionLost()
     throw new Error('AUTH_EXPIRED')
   }
 
   if (!res.ok) {
-    throw new Error(`API error: ${res.status}`)
+    const body = await res.text().catch(() => '')
+    throw new Error(`API ${res.status}: ${body}`)
   }
 
   return res.json()
 }
 
-// ── Auth API (no token needed) ──
+// ── Auth API (unauthenticated) ──
 
-export async function loginWithInitData(initData: string): Promise<{ access_token: string; user: Record<string, unknown> }> {
-  const res = await fetch(`${BASE_URL}/api/auth/telegram-webapp`, {
+export async function loginWithInitData(
+  initData: string
+): Promise<{ access_token: string; user: Record<string, unknown> }> {
+  const res = await fetch('/api/auth/telegram-webapp', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ init_data: initData }),
   })
-  if (!res.ok) {
-    throw new Error(`Auth failed: ${res.status}`)
-  }
+  if (!res.ok) throw new Error(`Auth failed: ${res.status}`)
   return res.json()
 }
 
-// ── Typed API ──
+export async function loginWithWidget(
+  userData: Record<string, unknown>
+): Promise<{ access_token: string; user: Record<string, unknown> }> {
+  const res = await fetch('/api/auth/telegram-widget', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(userData),
+  })
+  if (!res.ok) throw new Error(`Auth failed: ${res.status}`)
+  return res.json()
+}
+
+// ── Typed API (all authenticated) ──
 
 export const api = {
   // Library
@@ -106,7 +109,7 @@ export const api = {
     request(`/api/books/${bookId}/related`),
 
   getDownloadUrl: (bookId: string, format: string) => {
-    const token = getStoredToken()
+    const token = getToken()
     return `/api/books/${bookId}/download/${format}${token ? `?token=${encodeURIComponent(token)}` : ''}`
   },
 
@@ -148,4 +151,11 @@ export const api = {
 
   updateAudioProgress: (topicId: string, body: { chapter: number }) =>
     request(`/api/audiobooks/progress/${topicId}`, { method: 'PATCH', body: JSON.stringify(body) }),
+}
+
+// ── Helper for streaming URLs (need token in query param) ──
+
+export function getStreamUrl(topicId: string, fileIndex: number): string {
+  const token = getToken()
+  return `/api/audiobooks/${topicId}/stream/${fileIndex}${token ? `?token=${encodeURIComponent(token)}` : ''}`
 }
