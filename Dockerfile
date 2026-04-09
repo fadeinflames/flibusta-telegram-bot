@@ -1,4 +1,4 @@
-FROM python:3.12-slim
+FROM python:3.12-slim AS base
 
 ENV PYTHONPATH=/srv \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -20,7 +20,28 @@ RUN mkdir -p /srv/books /srv/logs /srv/data /srv/downloads
 
 # Исходный код
 COPY src ./src
+COPY api ./api
 
 VOLUME ["/srv/books", "/srv/logs", "/srv/data", "/srv/downloads"]
 
+
+# ── Stage: frontend build ──
+FROM node:20-alpine AS frontend
+
+WORKDIR /build
+COPY web/package.json web/package-lock.json* ./
+RUN npm ci --ignore-scripts
+COPY web/ ./
+RUN npm run build
+
+
+# ── Stage: bot (default) ──
+FROM base AS bot
 CMD ["python", "src/srv.py"]
+
+
+# ── Stage: web API ──
+FROM base AS web
+COPY --from=frontend /build/dist /srv/web/dist
+EXPOSE 8000
+CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]
