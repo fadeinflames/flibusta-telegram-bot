@@ -86,6 +86,11 @@ export default function BookDetailPage() {
     window.open(url, '_blank')
   }
 
+  const handleRead = () => {
+    impact('medium')
+    navigate(`/read/${id}`)
+  }
+
   if (book.isLoading) {
     return (
       <motion.div
@@ -359,6 +364,32 @@ export default function BookDetailPage() {
             </svg>
           </motion.button>
         </motion.div>
+
+        {/* Read button for FB2 */}
+        {formats.some((f) => f.toLowerCase().includes('fb2')) && (
+          <motion.div
+            initial={{ opacity: 0, y: 12 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ type: 'spring', damping: 22, stiffness: 240, delay: 0.32 }}
+            className="px-5 mt-4"
+          >
+            <motion.button
+              whileTap={{ scale: 0.97 }}
+              onClick={handleRead}
+              className="w-full flex items-center justify-center gap-2.5 py-4 rounded-2xl text-[16px] font-semibold"
+              style={{
+                backgroundColor: 'var(--tg-theme-button-color, #2481cc)',
+                color: 'var(--tg-theme-button-text-color, #fff)',
+              }}
+            >
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M2 3h6a4 4 0 014 4v14a3 3 0 00-3-3H2z" />
+                <path d="M22 3h-6a4 4 0 00-4 4v14a3 3 0 013-3h7z" />
+              </svg>
+              Читать
+            </motion.button>
+          </motion.div>
+        )}
 
         {/* Download format cards */}
         {formats.length > 0 && (

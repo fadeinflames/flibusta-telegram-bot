@@ -267,3 +267,114 @@ button:active, a:active, [role="button"]:active {
 .book-cover:active {
   transform: scale(0.96);
 }
+
+/* ──────── FB2 Reader Content ──────── */
+.fb2-content p {
+  margin-bottom: 0.6em;
+  text-indent: 1.5em;
+}
+
+.fb2-content h2 {
+  font-size: 1.3em;
+  font-weight: 700;
+  text-align: center;
+  margin: 1.5em 0 0.8em;
+}
+
+.fb2-content h3 {
+  font-size: 1.1em;
+  font-weight: 600;
+  text-align: center;
+  margin: 1.2em 0 0.6em;
+  color: var(--tg-theme-subtitle-text-color, #6d6d72);
+}
+
+.fb2-content .fb2-epigraph {
+  margin: 1.5em 0;
+  padding: 0 0 0 1.5em;
+  border-left: 3px solid color-mix(in srgb, var(--tg-theme-button-color, #2481cc) 30%, transparent);
+  font-style: italic;
+  opacity: 0.85;
+}
+
+.fb2-content .fb2-cite {
+  margin: 1em 0;
+  padding: 0.8em 1.2em;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--tg-theme-text-color, #000) 4%, transparent);
+  font-style: italic;
+}
+
+.fb2-content .fb2-poem {
+  margin: 1.5em 0;
+  padding-left: 2em;
+}
+
+.fb2-content .fb2-stanza {
+  margin-bottom: 1em;
+}
+
+.fb2-content .fb2-verse {
+  text-indent: 0;
+  margin-bottom: 0.15em;
+}
+
+.fb2-content .fb2-text-author {
+  text-indent: 0;
+  text-align: right;
+  font-style: italic;
+  opacity: 0.7;
+  margin-top: 0.5em;
+}
+
+.fb2-content .fb2-image {
+  text-align: center;
+  margin: 1.5em 0;
+}
+
+.fb2-content .fb2-image img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 8px;
+}
+
+.fb2-content .fb2-inline-img {
+  max-height: 1.5em;
+  vertical-align: middle;
+}
+
+.fb2-content .fb2-link {
+  color: var(--tg-theme-link-color, #2481cc);
+}
+
+.fb2-content .fb2-section {
+  margin-top: 1em;
+}
+
+.fb2-content .fb2-annotation {
+  padding: 1em;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--tg-theme-button-color, #2481cc) 6%, transparent);
+  margin-bottom: 1.5em;
+  font-style: italic;
+}
+
+.fb2-content .fb2-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 1em 0;
+}
+
+.fb2-content .fb2-table td,
+.fb2-content .fb2-table th {
+  padding: 0.5em;
+  border: 0.5px solid color-mix(in srgb, var(--tg-theme-text-color, #000) 15%, transparent);
+}
+
+.fb2-content em {
+  font-style: italic;
+}
+
+.fb2-content strong {
+  font-weight: 700;
+}

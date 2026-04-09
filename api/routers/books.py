@@ -1,9 +1,10 @@
 """Book detail and download endpoints."""
 
 import asyncio
+import zipfile
 
 from fastapi import APIRouter, HTTPException, Query
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 
 from api.auth import decode_access_token
 from api.deps import CurrentUser
@@ -94,6 +95,52 @@ async def download_book(book_id: str, fmt: str, token: str = Query(...)):
         buf,
         media_type=content_type,
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.get("/{book_id}/content/{fmt}")
+async def get_book_content(book_id: str, fmt: str, token: str = Query(...)):
+    """Return raw book content for in-app reading. Supports fb2."""
+    user = decode_access_token(token)
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+
+    if fmt.lower() not in ("fb2",):
+        raise HTTPException(status_code=400, detail="Only fb2 format is supported for reading")
+
+    book = await _get_book(book_id)
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found")
+
+    # Find matching format key
+    format_key = None
+    for key in book.formats:
+        if "fb2" in key.lower():
+            format_key = key
+            break
+
+    if not format_key:
+        raise HTTPException(status_code=404, detail="FB2 format not available for this book")
+
+    buf, filename = await asyncio.to_thread(flib.download_book, book, format_key)
+    if not buf:
+        raise HTTPException(status_code=502, detail="Download failed")
+
+    content = buf.read()
+
+    # Handle .fb2.zip — extract the .fb2 file from the zip
+    if content[:4] == b"PK\x03\x04":
+        import io
+        zf = zipfile.ZipFile(io.BytesIO(content))
+        fb2_names = [n for n in zf.namelist() if n.lower().endswith(".fb2")]
+        if not fb2_names:
+            raise HTTPException(status_code=502, detail="No .fb2 file found in archive")
+        content = zf.read(fb2_names[0])
+
+    return Response(
+        content=content,
+        media_type="application/xml; charset=utf-8",
+        headers={"Cache-Control": "private, max-age=3600"},
     )
 
 

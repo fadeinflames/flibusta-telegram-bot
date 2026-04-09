@@ -1,0 +1,560 @@
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
+import { useParams, useNavigate } from 'react-router-dom'
+import { useQuery } from '@tanstack/react-query'
+import { motion } from 'framer-motion'
+import { api } from '../api/client'
+import { useBackButton } from '../hooks/useTelegram'
+import type { BookDetail } from '../api/types'
+
+/* ────── FB2 Parser ────── */
+
+interface FB2Data {
+  title: string
+  author: string
+  chapters: FB2Chapter[]
+  images: Map<string, string> // id -> data:image/... URL
+}
+
+interface FB2Chapter {
+  title: string
+  html: string
+}
+
+function parseFB2(xml: string): FB2Data {
+  const parser = new DOMParser()
+  const doc = parser.parseFromString(xml, 'application/xml')
+
+  // Extract images (binary elements)
+  const images = new Map<string, string>()
+  doc.querySelectorAll('binary').forEach((bin) => {
+    const id = bin.getAttribute('id') || ''
+    const contentType = bin.getAttribute('content-type') || 'image/jpeg'
+    const base64 = (bin.textContent || '').replace(/\s/g, '')
+    if (id && base64) {
+      images.set(id, `data:${contentType};base64,${base64}`)
+    }
+  })
+
+  // Extract title info
+  const titleInfo = doc.querySelector('title-info')
+  const bookTitle = titleInfo?.querySelector('book-title')?.textContent || ''
+  const authorFirst = titleInfo?.querySelector('author first-name')?.textContent || ''
+  const authorLast = titleInfo?.querySelector('author last-name')?.textContent || ''
+  const author = [authorFirst, authorLast].filter(Boolean).join(' ')
+
+  // Extract body sections
+  const body = doc.querySelector('body')
+  const chapters: FB2Chapter[] = []
+
+  if (body) {
+    const topSections = body.querySelectorAll(':scope > section')
+    if (topSections.length > 0) {
+      topSections.forEach((section) => {
+        const chTitle = extractSectionTitle(section)
+        const html = convertSectionToHtml(section, images)
+        chapters.push({ title: chTitle || `Глава ${chapters.length + 1}`, html })
+      })
+    } else {
+      // No sections — whole body is one chapter
+      const html = convertNodeToHtml(body, images)
+      chapters.push({ title: bookTitle || 'Текст', html })
+    }
+  }
+
+  return { title: bookTitle, author, chapters, images }
+}
+
+function extractSectionTitle(section: Element): string {
+  const titleEl = section.querySelector(':scope > title')
+  if (!titleEl) return ''
+  return (titleEl.textContent || '').trim().replace(/\s+/g, ' ')
+}
+
+function convertSectionToHtml(section: Element, images: Map<string, string>): string {
+  const parts: string[] = []
+  for (const child of Array.from(section.childNodes)) {
+    if (child.nodeType === Node.ELEMENT_NODE) {
+      const el = child as Element
+      if (el.tagName === 'title') continue // already extracted
+      parts.push(convertElementToHtml(el, images))
+    }
+  }
+  return parts.join('\n')
+}
+
+function convertNodeToHtml(node: Element, images: Map<string, string>): string {
+  const parts: string[] = []
+  for (const child of Array.from(node.childNodes)) {
+    if (child.nodeType === Node.ELEMENT_NODE) {
+      parts.push(convertElementToHtml(child as Element, images))
+    }
+  }
+  return parts.join('\n')
+}
+
+function convertElementToHtml(el: Element, images: Map<string, string>): string {
+  const tag = el.tagName.toLowerCase()
+
+  switch (tag) {
+    case 'p':
+      return `<p>${inlineContent(el, images)}</p>`
+    case 'empty-line':
+      return '<br/>'
+    case 'title':
+      return `<h2>${inlineContent(el, images)}</h2>`
+    case 'subtitle':
+      return `<h3>${inlineContent(el, images)}</h3>`
+    case 'epigraph':
+      return `<blockquote class="fb2-epigraph">${convertNodeToHtml(el, images)}</blockquote>`
+    case 'cite':
+      return `<blockquote class="fb2-cite">${convertNodeToHtml(el, images)}</blockquote>`
+    case 'poem':
+      return `<div class="fb2-poem">${convertNodeToHtml(el, images)}</div>`
+    case 'stanza':
+      return `<div class="fb2-stanza">${convertNodeToHtml(el, images)}</div>`
+    case 'v':
+      return `<p class="fb2-verse">${inlineContent(el, images)}</p>`
+    case 'text-author':
+      return `<p class="fb2-text-author">${inlineContent(el, images)}</p>`
+    case 'section':
+      return `<div class="fb2-section">${convertNodeToHtml(el, images)}</div>`
+    case 'image': {
+      const href = el.getAttributeNS('http://www.w3.org/1999/xlink', 'href')
+        || el.getAttribute('l:href')
+        || el.getAttribute('xlink:href')
+        || ''
+      const imgId = href.replace('#', '')
+      const src = images.get(imgId)
+      if (src) return `<div class="fb2-image"><img src="${src}" alt="" /></div>`
+      return ''
+    }
+    case 'table':
+      return `<table class="fb2-table">${el.innerHTML}</table>`
+    case 'annotation':
+      return `<div class="fb2-annotation">${convertNodeToHtml(el, images)}</div>`
+    default:
+      return convertNodeToHtml(el, images)
+  }
+}
+
+function inlineContent(el: Element, images: Map<string, string>): string {
+  let result = ''
+  for (const child of Array.from(el.childNodes)) {
+    if (child.nodeType === Node.TEXT_NODE) {
+      result += escapeHtml(child.textContent || '')
+    } else if (child.nodeType === Node.ELEMENT_NODE) {
+      const childEl = child as Element
+      const tag = childEl.tagName.toLowerCase()
+      switch (tag) {
+        case 'strong':
+          result += `<strong>${inlineContent(childEl, images)}</strong>`
+          break
+        case 'emphasis':
+          result += `<em>${inlineContent(childEl, images)}</em>`
+          break
+        case 'strikethrough':
+          result += `<s>${inlineContent(childEl, images)}</s>`
+          break
+        case 'a':
+          result += `<span class="fb2-link">${inlineContent(childEl, images)}</span>`
+          break
+        case 'image': {
+          const href = childEl.getAttributeNS('http://www.w3.org/1999/xlink', 'href')
+            || childEl.getAttribute('l:href')
+            || childEl.getAttribute('xlink:href')
+            || ''
+          const imgId = href.replace('#', '')
+          const src = images.get(imgId)
+          if (src) result += `<img src="${src}" class="fb2-inline-img" alt="" />`
+          break
+        }
+        case 'p':
+          result += `<p>${inlineContent(childEl, images)}</p>`
+          break
+        default:
+          result += inlineContent(childEl, images)
+      }
+    }
+  }
+  return result
+}
+
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+}
+
+/* ────── Reader Component ────── */
+
+const FONT_SIZES = [14, 16, 18, 20, 22, 24]
+const STORAGE_KEY = 'fb2_reader_settings'
+
+function loadSettings(): { fontSize: number; progress: Record<string, number> } {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY)
+    if (raw) return JSON.parse(raw)
+  } catch { /* ignore */ }
+  return { fontSize: 18, progress: {} }
+}
+
+function saveSettings(settings: { fontSize: number; progress: Record<string, number> }) {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(settings))
+  } catch { /* ignore */ }
+}
+
+export default function BookReaderPage() {
+  const { id } = useParams<{ id: string }>()
+  const navigate = useNavigate()
+  const goBack = useCallback(() => navigate(-1), [navigate])
+  useBackButton(goBack)
+
+  const settings = useMemo(() => loadSettings(), [])
+  const [fontSize, setFontSize] = useState(settings.fontSize)
+  const [currentChapter, setCurrentChapter] = useState(0)
+  const [showControls, setShowControls] = useState(true)
+  const [showToc, setShowToc] = useState(false)
+  const contentRef = useRef<HTMLDivElement>(null)
+
+  // Fetch book metadata for title
+  const book = useQuery<BookDetail>({
+    queryKey: ['book', id],
+    queryFn: () => api.getBook(id!) as Promise<BookDetail>,
+    enabled: !!id,
+  })
+
+  // Fetch FB2 content
+  const content = useQuery<string>({
+    queryKey: ['book-content', id, 'fb2'],
+    queryFn: () => api.fetchBookContent(id!, 'fb2'),
+    enabled: !!id,
+    staleTime: Infinity,
+    gcTime: 30 * 60 * 1000,
+  })
+
+  const fb2 = useMemo(() => {
+    if (!content.data) return null
+    try {
+      return parseFB2(content.data)
+    } catch (err) {
+      console.error('FB2 parse error:', err)
+      return null
+    }
+  }, [content.data])
+
+  // Restore reading progress
+  useEffect(() => {
+    if (fb2 && id) {
+      const saved = settings.progress[id]
+      if (saved !== undefined && saved < fb2.chapters.length) {
+        setCurrentChapter(saved)
+      }
+    }
+  }, [fb2, id, settings])
+
+  // Save progress on chapter change
+  useEffect(() => {
+    if (id && fb2) {
+      const s = loadSettings()
+      s.progress[id] = currentChapter
+      s.fontSize = fontSize
+      saveSettings(s)
+    }
+  }, [currentChapter, fontSize, id, fb2])
+
+  // Scroll to top on chapter change
+  useEffect(() => {
+    contentRef.current?.scrollTo(0, 0)
+  }, [currentChapter])
+
+  const handleFontSize = (delta: number) => {
+    setFontSize((prev) => {
+      const idx = FONT_SIZES.indexOf(prev)
+      const next = FONT_SIZES[Math.max(0, Math.min(FONT_SIZES.length - 1, idx + delta))]
+      return next
+    })
+  }
+
+  const toggleControls = () => setShowControls((v) => !v)
+
+  // Loading state
+  if (content.isLoading) {
+    return (
+      <div className="h-full flex flex-col items-center justify-center gap-4" style={{ backgroundColor: 'var(--tg-theme-bg-color, #fff)' }}>
+        <div className="w-10 h-10 rounded-full border-3 border-t-transparent animate-spin" style={{ borderColor: 'var(--tg-theme-button-color, #2481cc)', borderTopColor: 'transparent' }} />
+        <p className="text-[15px] font-medium" style={{ color: 'var(--tg-theme-hint-color, #999)' }}>
+          Загрузка книги...
+        </p>
+      </div>
+    )
+  }
+
+  // Error state
+  if (content.isError || (!content.isLoading && !fb2)) {
+    return (
+      <div className="h-full flex flex-col items-center justify-center gap-4 px-8" style={{ backgroundColor: 'var(--tg-theme-bg-color, #fff)' }}>
+        <div className="text-[48px] opacity-40">😔</div>
+        <p className="text-[17px] font-semibold text-center" style={{ color: 'var(--tg-theme-text-color, #000)' }}>
+          Не удалось загрузить книгу
+        </p>
+        <p className="text-[14px] text-center" style={{ color: 'var(--tg-theme-hint-color, #999)' }}>
+          Попробуйте позже или скачайте файл
+        </p>
+        <motion.button
+          whileTap={{ scale: 0.95 }}
+          onClick={goBack}
+          className="mt-4 px-6 py-3 rounded-2xl text-[15px] font-semibold"
+          style={{
+            backgroundColor: 'var(--tg-theme-button-color, #2481cc)',
+            color: 'var(--tg-theme-button-text-color, #fff)',
+          }}
+        >
+          Назад
+        </motion.button>
+      </div>
+    )
+  }
+
+  if (!fb2) return null
+
+  const chapter = fb2.chapters[currentChapter]
+  const hasPrev = currentChapter > 0
+  const hasNext = currentChapter < fb2.chapters.length - 1
+
+  return (
+    <div className="h-full flex flex-col" style={{ backgroundColor: 'var(--tg-theme-bg-color, #fff)' }}>
+      {/* Top bar */}
+      <motion.div
+        initial={false}
+        animate={{ y: showControls ? 0 : -60, opacity: showControls ? 1 : 0 }}
+        transition={{ duration: 0.2 }}
+        className="flex-shrink-0 flex items-center gap-2 px-3 h-[52px] z-30"
+        style={{
+          backgroundColor: 'var(--tg-theme-bg-color, #fff)',
+          borderBottom: '0.5px solid color-mix(in srgb, var(--tg-theme-text-color, #000) 8%, transparent)',
+        }}
+      >
+        <button onClick={goBack} className="w-10 h-10 flex items-center justify-center rounded-full" style={{ color: 'var(--tg-theme-button-color, #2481cc)' }}>
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M15 18l-6-6 6-6" />
+          </svg>
+        </button>
+
+        <div className="flex-1 min-w-0 text-center">
+          <p className="text-[14px] font-semibold truncate" style={{ color: 'var(--tg-theme-text-color, #000)' }}>
+            {book.data?.title || fb2.title}
+          </p>
+          {fb2.chapters.length > 1 && (
+            <p className="text-[11px]" style={{ color: 'var(--tg-theme-hint-color, #999)' }}>
+              {currentChapter + 1} / {fb2.chapters.length}
+            </p>
+          )}
+        </div>
+
+        <button
+          onClick={() => setShowToc(true)}
+          className="w-10 h-10 flex items-center justify-center rounded-full"
+          style={{ color: 'var(--tg-theme-button-color, #2481cc)' }}
+        >
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <line x1="3" y1="6" x2="21" y2="6" />
+            <line x1="3" y1="12" x2="21" y2="12" />
+            <line x1="3" y1="18" x2="21" y2="18" />
+          </svg>
+        </button>
+      </motion.div>
+
+      {/* Content */}
+      <div
+        ref={contentRef}
+        className="flex-1 overflow-y-auto overscroll-contain"
+        onClick={toggleControls}
+        style={{
+          WebkitOverflowScrolling: 'touch',
+        }}
+      >
+        <div
+          className="fb2-content px-5 py-6 mx-auto"
+          style={{
+            maxWidth: '680px',
+            fontSize: `${fontSize}px`,
+            lineHeight: 1.7,
+            color: 'var(--tg-theme-text-color, #000)',
+          }}
+        >
+          {chapter.title && (
+            <h1
+              className="font-bold text-center mb-8"
+              style={{
+                fontSize: `${fontSize + 4}px`,
+                color: 'var(--tg-theme-text-color, #000)',
+              }}
+            >
+              {chapter.title}
+            </h1>
+          )}
+          <div dangerouslySetInnerHTML={{ __html: chapter.html }} />
+        </div>
+
+        {/* Chapter navigation at bottom */}
+        <div className="flex items-center justify-between px-5 py-6 max-w-[680px] mx-auto">
+          {hasPrev ? (
+            <motion.button
+              whileTap={{ scale: 0.95 }}
+              onClick={(e) => { e.stopPropagation(); setCurrentChapter((c) => c - 1) }}
+              className="flex items-center gap-2 px-4 py-3 rounded-2xl text-[14px] font-semibold"
+              style={{
+                backgroundColor: 'var(--tg-theme-secondary-bg-color, #f0f0f0)',
+                color: 'var(--tg-theme-button-color, #2481cc)',
+              }}
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M15 18l-6-6 6-6" />
+              </svg>
+              Назад
+            </motion.button>
+          ) : <div />}
+
+          {hasNext ? (
+            <motion.button
+              whileTap={{ scale: 0.95 }}
+              onClick={(e) => { e.stopPropagation(); setCurrentChapter((c) => c + 1) }}
+              className="flex items-center gap-2 px-4 py-3 rounded-2xl text-[14px] font-semibold"
+              style={{
+                backgroundColor: 'var(--tg-theme-button-color, #2481cc)',
+                color: 'var(--tg-theme-button-text-color, #fff)',
+              }}
+            >
+              Далее
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M9 18l6-6-6-6" />
+              </svg>
+            </motion.button>
+          ) : (
+            <motion.button
+              whileTap={{ scale: 0.95 }}
+              onClick={(e) => { e.stopPropagation(); goBack() }}
+              className="flex items-center gap-2 px-4 py-3 rounded-2xl text-[14px] font-semibold"
+              style={{
+                backgroundColor: 'var(--tg-theme-button-color, #2481cc)',
+                color: 'var(--tg-theme-button-text-color, #fff)',
+              }}
+            >
+              Готово
+            </motion.button>
+          )}
+        </div>
+      </div>
+
+      {/* Bottom toolbar */}
+      <motion.div
+        initial={false}
+        animate={{ y: showControls ? 0 : 80, opacity: showControls ? 1 : 0 }}
+        transition={{ duration: 0.2 }}
+        className="flex-shrink-0 flex items-center justify-center gap-6 px-5 h-[56px]"
+        style={{
+          backgroundColor: 'var(--tg-theme-bg-color, #fff)',
+          borderTop: '0.5px solid color-mix(in srgb, var(--tg-theme-text-color, #000) 8%, transparent)',
+          paddingBottom: 'var(--safe-area-bottom, 0px)',
+        }}
+      >
+        {/* Font size controls */}
+        <button
+          onClick={(e) => { e.stopPropagation(); handleFontSize(-1) }}
+          disabled={fontSize <= FONT_SIZES[0]}
+          className="w-10 h-10 flex items-center justify-center rounded-full disabled:opacity-25 transition-opacity"
+          style={{ color: 'var(--tg-theme-text-color, #000)' }}
+        >
+          <span className="text-[14px] font-bold">A-</span>
+        </button>
+
+        <span className="text-[13px] font-medium min-w-[30px] text-center" style={{ color: 'var(--tg-theme-hint-color, #999)' }}>
+          {fontSize}
+        </span>
+
+        <button
+          onClick={(e) => { e.stopPropagation(); handleFontSize(1) }}
+          disabled={fontSize >= FONT_SIZES[FONT_SIZES.length - 1]}
+          className="w-10 h-10 flex items-center justify-center rounded-full disabled:opacity-25 transition-opacity"
+          style={{ color: 'var(--tg-theme-text-color, #000)' }}
+        >
+          <span className="text-[18px] font-bold">A+</span>
+        </button>
+
+        {/* Progress indicator */}
+        {fb2.chapters.length > 1 && (
+          <>
+            <div className="w-px h-6" style={{ backgroundColor: 'color-mix(in srgb, var(--tg-theme-text-color, #000) 12%, transparent)' }} />
+            <span className="text-[13px] font-semibold" style={{ color: 'var(--tg-theme-hint-color, #999)' }}>
+              {Math.round(((currentChapter + 1) / fb2.chapters.length) * 100)}%
+            </span>
+          </>
+        )}
+      </motion.div>
+
+      {/* Table of Contents overlay */}
+      {showToc && (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          className="fixed inset-0 z-50 flex flex-col"
+          style={{ backgroundColor: 'var(--tg-theme-bg-color, #fff)' }}
+        >
+          <div className="flex items-center gap-2 px-3 h-[52px] flex-shrink-0"
+            style={{ borderBottom: '0.5px solid color-mix(in srgb, var(--tg-theme-text-color, #000) 8%, transparent)' }}
+          >
+            <button onClick={() => setShowToc(false)} className="w-10 h-10 flex items-center justify-center rounded-full" style={{ color: 'var(--tg-theme-button-color, #2481cc)' }}>
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <line x1="18" y1="6" x2="6" y2="18" />
+                <line x1="6" y1="6" x2="18" y2="18" />
+              </svg>
+            </button>
+            <p className="flex-1 text-[17px] font-semibold" style={{ color: 'var(--tg-theme-text-color, #000)' }}>
+              Содержание
+            </p>
+          </div>
+
+          <div className="flex-1 overflow-y-auto overscroll-contain" style={{ WebkitOverflowScrolling: 'touch' }}>
+            {fb2.chapters.map((ch, i) => (
+              <button
+                key={i}
+                onClick={() => { setCurrentChapter(i); setShowToc(false) }}
+                className="w-full text-left px-5 py-3.5 flex items-center gap-3 transition-colors"
+                style={{
+                  backgroundColor: i === currentChapter
+                    ? 'color-mix(in srgb, var(--tg-theme-button-color, #2481cc) 8%, transparent)'
+                    : 'transparent',
+                  borderBottom: '0.5px solid color-mix(in srgb, var(--tg-theme-text-color, #000) 6%, transparent)',
+                }}
+              >
+                <span className="text-[13px] font-bold w-7 text-center flex-shrink-0" style={{
+                  color: i === currentChapter
+                    ? 'var(--tg-theme-button-color, #2481cc)'
+                    : 'var(--tg-theme-hint-color, #999)',
+                }}>
+                  {i + 1}
+                </span>
+                <span className="text-[15px] flex-1 truncate" style={{
+                  color: i === currentChapter
+                    ? 'var(--tg-theme-button-color, #2481cc)'
+                    : 'var(--tg-theme-text-color, #000)',
+                  fontWeight: i === currentChapter ? 600 : 400,
+                }}>
+                  {ch.title}
+                </span>
+                {i === currentChapter && (
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--tg-theme-button-color, #2481cc)" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="20 6 9 17 4 12" />
+                  </svg>
+                )}
+              </button>
+            ))}
+          </div>
+        </motion.div>
+      )}
+    </div>
+  )
+}

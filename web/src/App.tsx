@@ -21,6 +21,7 @@ import AudiobookDetailPage from './pages/AudiobookDetailPage'
 import DownloadsPage from './pages/DownloadsPage'
 import ProfilePage from './pages/ProfilePage'
 import BookDetailPage from './pages/BookDetailPage'
+import BookReaderPage from './pages/BookReaderPage'
 
 function PublicRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated } = useAuth()
@@ -38,7 +39,7 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
 function Layout() {
   const location = useLocation()
   const [playerOpen, setPlayerOpen] = useState(false)
-  const isDetailPage = location.pathname.startsWith('/book/') || location.pathname.startsWith('/audiobook/')
+  const isDetailPage = location.pathname.startsWith('/book/') || location.pathname.startsWith('/audiobook/') || location.pathname.startsWith('/read/')
 
   return (
     <div className="h-full bg-tg-bg">
@@ -70,6 +71,7 @@ export default function App() {
         <Route path="downloads" element={<DownloadsPage />} />
         <Route path="profile" element={<ProfilePage />} />
         <Route path="book/:id" element={<BookDetailPage />} />
+        <Route path="read/:id" element={<BookReaderPage />} />
       </Route>
     </Routes>
   )

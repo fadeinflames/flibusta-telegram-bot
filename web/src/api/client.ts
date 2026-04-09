@@ -113,6 +113,23 @@ export const api = {
     return `/api/books/${bookId}/download/${format}${token ? `?token=${encodeURIComponent(token)}` : ''}`
   },
 
+  getBookContentUrl: (bookId: string, format: string) => {
+    const token = getToken()
+    return `/api/books/${bookId}/content/${format}${token ? `?token=${encodeURIComponent(token)}` : ''}`
+  },
+
+  fetchBookContent: async (bookId: string, format: string): Promise<string> => {
+    const token = getToken()
+    const url = `/api/books/${bookId}/content/${format}${token ? `?token=${encodeURIComponent(token)}` : ''}`
+    const res = await fetch(url)
+    if (res.status === 401) {
+      broadcastSessionLost()
+      throw new Error('AUTH_EXPIRED')
+    }
+    if (!res.ok) throw new Error(`API ${res.status}`)
+    return res.text()
+  },
+
   // Downloads
   getDownloads: (page = 1) =>
     request(`/api/downloads?page=${page}`),
