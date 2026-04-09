@@ -47,32 +47,32 @@ export default function MiniPlayer({ onExpand }: MiniPlayerProps) {
               borderTop: '0.5px solid color-mix(in srgb, var(--tg-theme-text-color, #000) 6%, transparent)',
             }}
           >
-            {/* Album art icon */}
-            <motion.div
-              animate={{ rotate: isPlaying ? 360 : 0 }}
-              transition={{
-                duration: 8,
-                repeat: isPlaying ? Infinity : 0,
-                ease: 'linear',
-              }}
-              className="w-11 h-11 rounded-[10px] flex-shrink-0 flex items-center justify-center shadow-sm"
+            {/* Album art / cover */}
+            <div
+              className="w-11 h-11 rounded-[10px] flex-shrink-0 flex items-center justify-center shadow-sm overflow-hidden"
               style={{
-                background: 'linear-gradient(135deg, var(--tg-theme-button-color, #2481cc), color-mix(in srgb, var(--tg-theme-button-color, #2481cc) 55%, #a855f7))',
+                background: currentTrack.cover
+                  ? undefined
+                  : 'linear-gradient(135deg, var(--tg-theme-button-color, #2481cc), color-mix(in srgb, var(--tg-theme-button-color, #2481cc) 55%, #a855f7))',
               }}
             >
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
-                <path
-                  d="M9 18V5l12-2v13"
-                  stroke="white"
-                  strokeWidth="1.8"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  opacity="0.9"
-                />
-                <circle cx="6" cy="18" r="3" stroke="white" strokeWidth="1.8" opacity="0.9" />
-                <circle cx="18" cy="16" r="3" stroke="white" strokeWidth="1.8" opacity="0.9" />
-              </svg>
-            </motion.div>
+              {currentTrack.cover ? (
+                <img src={currentTrack.cover} alt="" className="w-full h-full object-cover" />
+              ) : (
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+                  <path
+                    d="M9 18V5l12-2v13"
+                    stroke="white"
+                    strokeWidth="1.8"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    opacity="0.9"
+                  />
+                  <circle cx="6" cy="18" r="3" stroke="white" strokeWidth="1.8" opacity="0.9" />
+                  <circle cx="18" cy="16" r="3" stroke="white" strokeWidth="1.8" opacity="0.9" />
+                </svg>
+              )}
+            </div>
 
             {/* Track info */}
             <div className="flex-1 min-w-0 text-left">

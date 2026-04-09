@@ -126,6 +126,7 @@ export interface ListeningProgressItem {
   topic_id: string
   title: string
   author: string
+  cover: string
   current_chapter: number
   total_chapters: number
   updated_at: number

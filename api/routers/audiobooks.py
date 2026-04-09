@@ -263,6 +263,17 @@ async def get_listening_progress(user: CurrentUser):
     """Get user's listening progress (currently reading audiobooks)."""
     user_id = int(user["id"])
     items = await asyncio.to_thread(db.reading_progress_list, user_id)
+    audio_items = [item for item in items if item.get("kind") == "audio"]
+
+    # Enrich with covers from Flibusta (cached)
+    covers: dict[str, str] = {}
+    for item in audio_items:
+        title = item.get("title", "")
+        if title:
+            meta = await _get_flibusta_metadata(title)
+            if meta.get("cover"):
+                covers[item.get("rutracker_topic_id", "")] = meta["cover"]
+
     return {
         "items": [
             {
@@ -270,12 +281,12 @@ async def get_listening_progress(user: CurrentUser):
                 "topic_id": item.get("rutracker_topic_id", ""),
                 "title": item.get("title", ""),
                 "author": item.get("author", ""),
+                "cover": covers.get(item.get("rutracker_topic_id", ""), ""),
                 "current_chapter": item.get("current_chapter", 0),
                 "total_chapters": item.get("total_chapters", 0),
                 "updated_at": item.get("updated_at", 0),
             }
-            for item in items
-            if item.get("kind") == "audio"
+            for item in audio_items
         ],
     }
 

@@ -227,19 +227,25 @@ export default function AudiobooksPage() {
                               : 'color-mix(in srgb, var(--tg-theme-secondary-bg-color, #f0f0f0) 60%, transparent)',
                           }}
                         >
-                          {/* Album art style icon */}
+                          {/* Album art / cover */}
                           <div
                             className="w-[52px] h-[52px] rounded-[14px] flex-shrink-0 flex items-center justify-center shadow-sm relative overflow-hidden"
                             style={{
-                              background: isActive
-                                ? 'linear-gradient(135deg, var(--tg-theme-button-color, #2481cc), color-mix(in srgb, var(--tg-theme-button-color, #2481cc) 60%, #a855f7))'
-                                : 'linear-gradient(135deg, color-mix(in srgb, var(--tg-theme-button-color, #2481cc) 70%, #6366f1), var(--tg-theme-button-color, #2481cc))',
+                              background: item.cover
+                                ? undefined
+                                : isActive
+                                  ? 'linear-gradient(135deg, var(--tg-theme-button-color, #2481cc), color-mix(in srgb, var(--tg-theme-button-color, #2481cc) 60%, #a855f7))'
+                                  : 'linear-gradient(135deg, color-mix(in srgb, var(--tg-theme-button-color, #2481cc) 70%, #6366f1), var(--tg-theme-button-color, #2481cc))',
                             }}
                           >
-                            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{ opacity: 0.9 }}>
-                              <path d="M3 18v-6a9 9 0 0118 0v6" />
-                              <path d="M21 19a2 2 0 01-2 2h-1a2 2 0 01-2-2v-3a2 2 0 012-2h3v5zM3 19a2 2 0 002 2h1a2 2 0 002-2v-3a2 2 0 00-2-2H3v5z" />
-                            </svg>
+                            {item.cover ? (
+                              <img src={item.cover} alt="" className="w-full h-full object-cover" loading="lazy" />
+                            ) : (
+                              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{ opacity: 0.9 }}>
+                                <path d="M3 18v-6a9 9 0 0118 0v6" />
+                                <path d="M21 19a2 2 0 01-2 2h-1a2 2 0 01-2-2v-3a2 2 0 012-2h3v5zM3 19a2 2 0 002 2h1a2 2 0 002-2v-3a2 2 0 00-2-2H3v5z" />
+                              </svg>
+                            )}
                           </div>
 
                           <div className="flex-1 min-w-0">
