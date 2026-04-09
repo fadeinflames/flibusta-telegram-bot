@@ -1,5 +1,7 @@
 """FastAPI application — serves API and static frontend."""
 
+import asyncio
+import logging
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -13,12 +15,35 @@ from api.routers import auth_router, audiobooks, books, downloads, library, prof
 from src import database as db
 from src import rt_cache
 
+logger = logging.getLogger(__name__)
+
+CACHE_CLEANUP_INTERVAL = 24 * 3600  # 24 hours
+
+
+async def _cache_cleanup_loop():
+    """Background task: clean expired cache entries once per day."""
+    while True:
+        await asyncio.sleep(CACHE_CLEANUP_INTERVAL)
+        try:
+            deleted = await asyncio.to_thread(rt_cache.cleanup_expired)
+            if deleted:
+                logger.info("Cache cleanup: removed %d expired entries", deleted)
+        except Exception as e:
+            logger.warning("Cache cleanup error: %s", e)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     db.init_database()
     rt_cache.init_cache_table()
+    # Run initial cleanup on startup
+    deleted = rt_cache.cleanup_expired()
+    if deleted:
+        logger.info("Startup cache cleanup: removed %d expired entries", deleted)
+    # Start background cleanup loop
+    cleanup_task = asyncio.create_task(_cache_cleanup_loop())
     yield
+    cleanup_task.cancel()
 
 
 app = FastAPI(title="Flibusta WebApp API", lifespan=lifespan)
@@ -45,6 +70,21 @@ app.include_router(audiobooks.router)
 @app.get("/api/health")
 async def health():
     return {"status": "ok"}
+
+
+@app.post("/api/cache/cleanup")
+async def cache_cleanup():
+    """Manually trigger cache cleanup (remove expired entries)."""
+    deleted = await asyncio.to_thread(rt_cache.cleanup_expired)
+    stats = await asyncio.to_thread(rt_cache.get_stats)
+    return {"deleted": deleted, **stats}
+
+
+@app.delete("/api/cache")
+async def cache_clear():
+    """Clear entire cache."""
+    cleared = await asyncio.to_thread(rt_cache.clear_all)
+    return {"cleared": cleared}
 
 
 # Serve frontend static files in production

@@ -150,13 +150,47 @@ def topic_files_key(topic_id: str) -> str:
 
 
 def cleanup_expired() -> int:
-    """Delete expired entries from SQLite. Returns count deleted."""
+    """Delete expired entries from SQLite + memory. Returns count deleted."""
+    # Clean memory
+    now = time.time()
+    with _mem_lock:
+        expired_keys = [k for k, (exp, _) in _mem_cache.items() if now > exp]
+        for k in expired_keys:
+            del _mem_cache[k]
+    # Clean SQLite
     try:
         conn = _get_conn()
         cursor = conn.execute(
-            "DELETE FROM rt_cache WHERE expires_at < ?", (time.time(),)
+            "DELETE FROM rt_cache WHERE expires_at < ?", (now,)
         )
         conn.commit()
-        return cursor.rowcount
+        return cursor.rowcount + len(expired_keys)
     except Exception:
-        return 0
+        return len(expired_keys)
+
+
+def get_stats() -> dict:
+    """Return cache statistics."""
+    with _mem_lock:
+        mem_count = len(_mem_cache)
+    try:
+        conn = _get_conn()
+        row = conn.execute("SELECT COUNT(*) FROM rt_cache").fetchone()
+        db_count = row[0] if row else 0
+    except Exception:
+        db_count = 0
+    return {"memory_entries": mem_count, "db_entries": db_count}
+
+
+def clear_all() -> int:
+    """Clear all cache entries (memory + SQLite)."""
+    with _mem_lock:
+        count = len(_mem_cache)
+        _mem_cache.clear()
+    try:
+        conn = _get_conn()
+        cursor = conn.execute("DELETE FROM rt_cache")
+        conn.commit()
+        return count + cursor.rowcount
+    except Exception:
+        return count
