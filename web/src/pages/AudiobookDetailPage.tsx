@@ -4,7 +4,7 @@ import { useQuery } from '@tanstack/react-query'
 import { motion } from 'framer-motion'
 import { api } from '../api/client'
 import { useBackButton, useHaptic } from '../hooks/useTelegram'
-import { useAudioPlayer } from '../contexts/AudioPlayerContext'
+import { useAudioPlayer, loadAudioState } from '../contexts/AudioPlayerContext'
 import { detailVariants, detailTransition, staggerContainer, staggerItem } from '../lib/animations'
 import type { AudiobookTopicInfo, AudiobookFileEntry } from '../api/types'
 
@@ -204,6 +204,15 @@ export default function AudiobookDetailPage() {
                 if (isCurrentBook) {
                   toggle()
                 } else if (audioFiles.length > 0) {
+                  // Resume from saved position if available
+                  const saved = loadAudioState()
+                  if (saved && saved.topicId === topicId) {
+                    const savedFile = audioFiles.find(f => f.index === saved.fileIndex)
+                    if (savedFile) {
+                      handlePlayChapter(savedFile, audioFiles.indexOf(savedFile))
+                      return
+                    }
+                  }
                   handlePlayChapter(audioFiles[0], 0)
                 }
               }}
@@ -224,7 +233,10 @@ export default function AudiobookDetailPage() {
                   <polygon points="5 3 19 12 5 21 5 3" />
                 </svg>
               )}
-              {isCurrentBook && isPlaying ? 'Пауза' : 'Слушать'}
+              {isCurrentBook && isPlaying ? 'Пауза' : (() => {
+                const saved = loadAudioState()
+                return saved && saved.topicId === topicId ? 'Продолжить' : 'Слушать'
+              })()}
             </motion.button>
           )}
 

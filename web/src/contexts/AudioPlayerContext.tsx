@@ -59,7 +59,41 @@ export function useAudioPlayer() {
   return ctx || defaultState
 }
 
+export { loadAudioState }
+export type { SavedAudioState }
+
 const PLAYBACK_RATES = [0.75, 1, 1.25, 1.5, 2]
+const AUDIO_STATE_KEY = 'audio_player_state'
+
+interface SavedAudioState {
+  topicId: string
+  fileIndex: number
+  currentTime: number
+  title: string
+  author: string
+  chapterName: string
+  cover?: string
+  playbackRate: number
+  chapters: { name: string; index: number }[]
+}
+
+function loadAudioState(): SavedAudioState | null {
+  try {
+    const raw = localStorage.getItem(AUDIO_STATE_KEY)
+    if (raw) return JSON.parse(raw)
+  } catch { /* ignore */ }
+  return null
+}
+
+function saveAudioState(state: SavedAudioState | null) {
+  try {
+    if (state) {
+      localStorage.setItem(AUDIO_STATE_KEY, JSON.stringify(state))
+    } else {
+      localStorage.removeItem(AUDIO_STATE_KEY)
+    }
+  } catch { /* ignore */ }
+}
 
 export function AudioPlayerProvider({ children }: { children: ReactNode }) {
   const audioRef = useRef<HTMLAudioElement | null>(null)
@@ -110,18 +144,46 @@ export function AudioPlayerProvider({ children }: { children: ReactNode }) {
     }
   }, [])
 
-  // Auto-save progress every 10 seconds
+  // Auto-save progress every 10 seconds (to server + localStorage)
   useEffect(() => {
     clearInterval(saveTimerRef.current)
     if (currentTrack && isPlaying) {
       saveTimerRef.current = setInterval(() => {
-        if (currentTrack) {
+        if (currentTrack && audioRef.current) {
           api.updateAudioProgress(currentTrack.topicId, { chapter: currentTrack.fileIndex }).catch(() => {})
+          saveAudioState({
+            topicId: currentTrack.topicId,
+            fileIndex: currentTrack.fileIndex,
+            currentTime: audioRef.current.currentTime,
+            title: currentTrack.title,
+            author: currentTrack.author,
+            chapterName: currentTrack.chapterName,
+            cover: currentTrack.cover,
+            playbackRate,
+            chapters: chaptersRef.current,
+          })
         }
-      }, 10_000)
+      }, 5_000)
     }
     return () => clearInterval(saveTimerRef.current)
-  }, [currentTrack, isPlaying])
+  }, [currentTrack, isPlaying, playbackRate])
+
+  // Also save on pause
+  useEffect(() => {
+    if (currentTrack && !isPlaying && audioRef.current && audioRef.current.currentTime > 0) {
+      saveAudioState({
+        topicId: currentTrack.topicId,
+        fileIndex: currentTrack.fileIndex,
+        currentTime: audioRef.current.currentTime,
+        title: currentTrack.title,
+        author: currentTrack.author,
+        chapterName: currentTrack.chapterName,
+        cover: currentTrack.cover,
+        playbackRate,
+        chapters: chaptersRef.current,
+      })
+    }
+  }, [currentTrack, isPlaying, playbackRate])
 
   const play = useCallback((track: Track, newChapters?: { name: string; index: number }[]) => {
     const audio = audioRef.current
@@ -129,6 +191,12 @@ export function AudioPlayerProvider({ children }: { children: ReactNode }) {
 
     const url = getStreamUrl(track.topicId, track.fileIndex)
     console.log('[AudioPlayer] play:', url)
+
+    // Check if we have a saved position for this exact track+chapter
+    const saved = loadAudioState()
+    const resumeTime = (saved && saved.topicId === track.topicId && saved.fileIndex === track.fileIndex && saved.currentTime > 0)
+      ? saved.currentTime
+      : 0
 
     // Stop current playback first
     audio.pause()
@@ -141,9 +209,11 @@ export function AudioPlayerProvider({ children }: { children: ReactNode }) {
     // Play after load starts
     const onCanPlay = () => {
       audio.removeEventListener('canplay', onCanPlay)
+      if (resumeTime > 0) {
+        audio.currentTime = resumeTime
+      }
       audio.play().catch(err => {
         console.error('[AudioPlayer] play() failed:', err)
-        // Retry once on user-gesture-required error
       })
     }
     audio.addEventListener('canplay', onCanPlay)
@@ -221,6 +291,7 @@ export function AudioPlayerProvider({ children }: { children: ReactNode }) {
     setDuration(0)
     setChapters([])
     chaptersRef.current = []
+    saveAudioState(null)
   }, [])
 
   return (
