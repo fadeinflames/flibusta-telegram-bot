@@ -48,10 +48,12 @@ html, body {
 /* ──────── Page scroll container ──────── */
 .page-scroll {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
   overscroll-behavior-y: contain;
   -webkit-overflow-scrolling: touch;
+  touch-action: pan-y;
   padding-bottom: calc(var(--bottom-nav-height) + var(--mini-player-height) + var(--safe-area-bottom) + 16px);
 }
 
