@@ -1,6 +1,6 @@
 import { createContext, useContext, useState, useRef, useCallback, useEffect } from 'react'
 import type { ReactNode } from 'react'
-import { api } from '../api/client'
+import { api, getStoredToken } from '../api/client'
 
 interface Track {
   topicId: string
@@ -107,8 +107,8 @@ export function AudioPlayerProvider({ children }: { children: ReactNode }) {
     const audio = audioRef.current
     if (!audio) return
 
-    const initData = window.Telegram?.WebApp?.initData || ''
-    const url = `/api/audiobooks/${track.topicId}/stream/${track.fileIndex}?auth=${encodeURIComponent(initData)}`
+    const token = getStoredToken() || ''
+    const url = `/api/audiobooks/${track.topicId}/stream/${track.fileIndex}?token=${encodeURIComponent(token)}`
     audio.src = url
     audio.playbackRate = playbackRate
     audio.play().catch(() => {})

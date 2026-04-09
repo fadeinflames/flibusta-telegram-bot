@@ -1,22 +1,21 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { motion } from 'framer-motion'
-import { api } from '../api/client'
-import { useHaptic, getTelegramUser } from '../hooks/useTelegram'
-import { pageVariants, pageTransition } from '../lib/animations'
+import { api, getStoredUser, clearAuth } from '../api/client'
+import { useHaptic } from '../hooks/useTelegram'
 import type { UserProfile } from '../api/types'
 
 const FORMAT_OPTIONS = ['fb2', 'epub', 'mobi', 'pdf', 'djvu']
 
-const STAT_GRADIENTS = [
-  'linear-gradient(135deg, #667eea15, #764ba215)',
-  'linear-gradient(135deg, #f093fb15, #f5576c15)',
-  'linear-gradient(135deg, #4facfe15, #00f2fe15)',
-]
-
 export default function ProfilePage() {
   const queryClient = useQueryClient()
   const { selection, notification } = useHaptic()
-  const tgUser = getTelegramUser()
+  const storedUser = getStoredUser()
+  const tgUser = {
+    first_name: (storedUser?.first_name as string) || '',
+    last_name: (storedUser?.last_name as string) || '',
+    username: (storedUser?.username as string) || '',
+    photo_url: (storedUser?.photo_url as string) || '',
+  }
 
   const profile = useQuery<UserProfile>({
     queryKey: ['profile'],
@@ -36,93 +35,92 @@ export default function ProfilePage() {
     },
   })
 
+  const handleLogout = () => {
+    clearAuth()
+    window.location.reload()
+  }
+
   const p = profile.data
 
   return (
-    <motion.div
-      variants={pageVariants}
-      initial="initial"
-      animate="animate"
-      exit="exit"
-      transition={pageTransition}
-      className="h-full flex flex-col"
-    >
+    <div className="h-full flex flex-col">
       <div className="page-scroll">
         {/* Avatar & name */}
-        <div className="flex flex-col items-center pt-8 pb-5 px-4">
+        <div className="flex flex-col items-center pt-8 pb-6 px-4">
           <motion.div
-            initial={{ scale: 0.8, opacity: 0 }}
+            initial={{ scale: 0.85, opacity: 0 }}
             animate={{ scale: 1, opacity: 1 }}
-            transition={{ type: 'spring', damping: 15, stiffness: 200, delay: 0.1 }}
-            className="w-[88px] h-[88px] rounded-full overflow-hidden ring-4 ring-offset-2 mb-4"
+            transition={{ duration: 0.3, ease: 'easeOut' }}
+            className="w-[88px] h-[88px] rounded-full overflow-hidden mb-4"
             style={{
               backgroundColor: 'var(--tg-theme-button-color, #2481cc)',
-              '--tw-ring-color': 'color-mix(in srgb, var(--tg-theme-button-color, #2481cc) 20%, transparent)',
-              '--tw-ring-offset-color': 'var(--tg-theme-bg-color, #fff)',
-            } as React.CSSProperties}
+              boxShadow: '0 0 0 3px var(--tg-theme-bg-color, #fff), 0 0 0 5px color-mix(in srgb, var(--tg-theme-button-color, #2481cc) 25%, transparent)',
+            }}
           >
-            {tgUser?.photo_url ? (
+            {tgUser.photo_url ? (
               <img src={tgUser.photo_url} alt="" className="w-full h-full object-cover" />
             ) : (
               <div className="w-full h-full flex items-center justify-center text-3xl text-white font-bold">
-                {(tgUser?.first_name || '?')[0]}
+                {(tgUser.first_name || '?')[0]}
               </div>
             )}
           </motion.div>
-          <h1 className="text-[24px] font-bold" style={{ color: 'var(--tg-theme-text-color, #000)' }}>
-            {tgUser?.first_name} {tgUser?.last_name || ''}
+          <h1 className="text-[22px] font-bold" style={{ color: 'var(--tg-theme-text-color, #000)' }}>
+            {tgUser.first_name} {tgUser.last_name}
           </h1>
-          {tgUser?.username && (
+          {tgUser.username && (
             <p className="text-[14px] mt-0.5" style={{ color: 'var(--tg-theme-hint-color, #999)' }}>
               @{tgUser.username}
             </p>
           )}
         </div>
 
-        {/* Achievement */}
+        {/* Level */}
         {p && (
-          <div className="mx-4 mb-4 p-4 rounded-ios-lg glass-border card-elevated"
-            style={{ backgroundColor: 'var(--tg-theme-secondary-bg-color, #f0f0f0)' }}>
+          <div className="mx-4 mb-4 p-4 rounded-2xl"
+            style={{
+              backgroundColor: 'var(--tg-theme-secondary-bg-color, #f0f0f0)',
+              boxShadow: '0 1px 3px rgba(0,0,0,0.04)',
+            }}>
             <div className="flex items-center justify-between mb-2.5">
-              <span className="text-[17px] font-bold" style={{ color: 'var(--tg-theme-text-color, #000)' }}>
+              <span className="text-[16px] font-bold" style={{ color: 'var(--tg-theme-text-color, #000)' }}>
                 {p.level_name}
               </span>
               <span className="text-[13px] font-semibold" style={{ color: 'var(--tg-theme-button-color, #2481cc)' }}>
                 {Math.round(p.level_progress * 100)}%
               </span>
             </div>
-            <div className="h-[6px] rounded-full overflow-hidden"
+            <div className="h-[5px] rounded-full overflow-hidden"
               style={{ backgroundColor: 'color-mix(in srgb, var(--tg-theme-text-color, #000) 8%, transparent)' }}>
               <motion.div
                 initial={{ width: 0 }}
                 animate={{ width: `${p.level_progress * 100}%` }}
-                transition={{ duration: 1, ease: [0.22, 1, 0.36, 1], delay: 0.3 }}
+                transition={{ duration: 0.8, ease: [0.22, 1, 0.36, 1], delay: 0.2 }}
                 className="h-full rounded-full"
-                style={{
-                  background: `linear-gradient(90deg, var(--tg-theme-button-color, #2481cc), color-mix(in srgb, var(--tg-theme-button-color, #2481cc) 70%, #a855f7))`,
-                }}
+                style={{ background: `linear-gradient(90deg, var(--tg-theme-button-color, #2481cc), color-mix(in srgb, var(--tg-theme-button-color, #2481cc) 70%, #a855f7))` }}
               />
             </div>
           </div>
         )}
 
-        {/* Stats grid */}
+        {/* Stats */}
         {p && (
-          <div className="grid grid-cols-3 gap-2.5 px-4 mb-5">
+          <div className="grid grid-cols-3 gap-2.5 px-4 mb-6">
             {[
-              { value: p.search_count, label: 'Поисков' },
-              { value: p.download_count, label: 'Загрузок' },
-              { value: p.favorites_count, label: 'В библиотеке' },
+              { value: p.search_count, label: 'Поисков', icon: '🔍' },
+              { value: p.download_count, label: 'Загрузок', icon: '📥' },
+              { value: p.favorites_count, label: 'В библиотеке', icon: '📚' },
             ].map((stat, i) => (
               <motion.div
                 key={stat.label}
-                initial={{ opacity: 0, y: 12 }}
+                initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: 0.2 + i * 0.08, type: 'spring', damping: 20 }}
-                className="flex flex-col items-center p-3.5 rounded-ios-lg glass-border"
-                style={{ background: STAT_GRADIENTS[i], backgroundColor: 'var(--tg-theme-secondary-bg-color, #f0f0f0)' }}
+                transition={{ delay: 0.15 + i * 0.06, duration: 0.25 }}
+                className="flex flex-col items-center p-3.5 rounded-2xl"
+                style={{ backgroundColor: 'var(--tg-theme-secondary-bg-color, #f0f0f0)' }}
               >
-                <span className="text-[24px] font-bold" style={{ color: 'var(--tg-theme-text-color, #000)' }}>
+                <span className="text-[20px] mb-0.5">{stat.icon}</span>
+                <span className="text-[20px] font-bold" style={{ color: 'var(--tg-theme-text-color, #000)' }}>
                   {stat.value}
                 </span>
                 <span className="text-[11px] mt-0.5 font-medium" style={{ color: 'var(--tg-theme-hint-color, #999)' }}>
@@ -133,57 +131,58 @@ export default function ProfilePage() {
           </div>
         )}
 
-        {/* Settings */}
-        <div className="px-4 mt-2">
-          <p className="text-[13px] font-semibold uppercase tracking-wider mb-2.5"
+        {/* Default format */}
+        <div className="px-4 mb-6">
+          <p className="text-[13px] font-semibold uppercase tracking-wider mb-3"
             style={{ color: 'var(--tg-theme-section-header-text-color, #6d6d72)' }}>
-            Настройки
+            Формат по умолчанию
           </p>
-          <div className="rounded-ios-lg overflow-hidden glass-border card-elevated"
+          <div className="p-4 rounded-2xl"
             style={{ backgroundColor: 'var(--tg-theme-secondary-bg-color, #f0f0f0)' }}>
-            <div className="px-4 py-3.5">
-              <p className="text-[15px] font-semibold mb-3" style={{ color: 'var(--tg-theme-text-color, #000)' }}>
-                Формат по умолчанию
-              </p>
-              <div className="flex gap-2">
-                {FORMAT_OPTIONS.map(fmt => {
-                  const isActive = prefs.data?.default_format === fmt
-                  return (
-                    <motion.button
-                      key={fmt}
-                      whileTap={{ scale: 0.93 }}
-                      onClick={() => { selection(); updateFormat.mutate(fmt) }}
-                      className="px-3 py-1.5 rounded-full text-[13px] font-semibold transition-all duration-200 relative"
-                      style={{
-                        color: isActive ? 'var(--tg-theme-button-text-color, #fff)' : 'var(--tg-theme-text-color, #000)',
-                      }}
-                    >
-                      {isActive && (
-                        <motion.div
-                          layoutId="format-pill"
-                          className="absolute inset-0 rounded-full"
-                          style={{ backgroundColor: 'var(--tg-theme-button-color, #2481cc)' }}
-                          transition={{ type: 'spring', damping: 22, stiffness: 280 }}
-                        />
-                      )}
-                      {!isActive && (
-                        <div className="absolute inset-0 rounded-full" style={{ backgroundColor: 'var(--tg-theme-bg-color, #fff)' }} />
-                      )}
-                      <span className="relative z-10">{fmt.toUpperCase()}</span>
-                    </motion.button>
-                  )
-                })}
-              </div>
+            <div className="flex gap-2">
+              {FORMAT_OPTIONS.map(fmt => {
+                const isActive = prefs.data?.default_format === fmt
+                return (
+                  <button
+                    key={fmt}
+                    onClick={() => { selection(); updateFormat.mutate(fmt) }}
+                    className="px-3 py-2 rounded-xl text-[13px] font-bold transition-all duration-200"
+                    style={{
+                      color: isActive ? 'var(--tg-theme-button-text-color, #fff)' : 'var(--tg-theme-text-color, #000)',
+                      backgroundColor: isActive
+                        ? 'var(--tg-theme-button-color, #2481cc)'
+                        : 'var(--tg-theme-bg-color, #fff)',
+                      boxShadow: isActive ? '0 2px 8px rgba(0,0,0,0.12)' : 'none',
+                    }}
+                  >
+                    {fmt.toUpperCase()}
+                  </button>
+                )
+              })}
             </div>
           </div>
         </div>
 
+        {/* Logout */}
+        <div className="px-4 mb-4">
+          <button
+            onClick={handleLogout}
+            className="w-full py-3.5 rounded-2xl text-[15px] font-semibold transition-transform active:scale-[0.98]"
+            style={{
+              backgroundColor: 'var(--tg-theme-secondary-bg-color, #f0f0f0)',
+              color: 'var(--tg-theme-destructive-text-color, #ff3b30)',
+            }}
+          >
+            Выйти
+          </button>
+        </div>
+
         {p?.first_seen && (
-          <p className="text-center text-[12px] mt-8 pb-4" style={{ color: 'var(--tg-theme-hint-color, #999)' }}>
+          <p className="text-center text-[12px] mt-2 pb-4" style={{ color: 'var(--tg-theme-hint-color, #999)' }}>
             Участник с {new Date(p.first_seen).toLocaleDateString('ru-RU', { year: 'numeric', month: 'long' })}
           </p>
         )}
       </div>
-    </motion.div>
+    </div>
   )
 }

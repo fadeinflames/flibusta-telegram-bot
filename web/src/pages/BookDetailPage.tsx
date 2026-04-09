@@ -83,8 +83,7 @@ export default function BookDetailPage() {
     impact('medium')
     const formatKey = format.replace(/[()]/g, '')
     const url = api.getDownloadUrl(id!, formatKey)
-    const initData = window.Telegram?.WebApp?.initData || ''
-    window.open(`${url}?auth=${encodeURIComponent(initData)}`, '_blank')
+    window.open(url, '_blank')
   }
 
   if (book.isLoading) {
@@ -147,6 +146,16 @@ export default function BookDetailPage() {
           className="relative h-[280px] flex items-end justify-center overflow-hidden"
           style={{ backgroundColor: 'var(--tg-theme-secondary-bg-color, #f0f0f0)' }}
         >
+          {/* Back button */}
+          <button
+            onClick={goBack}
+            className="absolute top-4 left-4 z-20 w-9 h-9 rounded-full flex items-center justify-center backdrop-blur-sm"
+            style={{ backgroundColor: 'rgba(0,0,0,0.3)' }}
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M15 18l-6-6 6-6" />
+            </svg>
+          </button>
           {b.cover && (
             <div
               className="absolute inset-0"

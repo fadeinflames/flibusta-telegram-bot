@@ -4,9 +4,10 @@ import asyncio
 import os
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse, StreamingResponse
 
+from api.auth import decode_access_token
 from api.deps import CurrentUser
 from src import database as db
 from src import rutracker
@@ -72,8 +73,11 @@ async def get_topic_files(topic_id: str, user: dict = CurrentUser):
 
 
 @router.get("/{topic_id}/stream/{file_index}")
-async def stream_audio(topic_id: str, file_index: int, request: Request, user: dict = CurrentUser):
+async def stream_audio(topic_id: str, file_index: int, request: Request, token: str = Query(...)):
     """Stream an audio file with HTTP Range support for seeking."""
+    user = decode_access_token(token)
+    if not user:
+        raise HTTPException(401, "Invalid or expired token")
     dl_dir = Path(RUTRACKER_DOWNLOAD_DIR) / topic_id
     if not dl_dir.exists():
         raise HTTPException(404, "Files not downloaded yet")
