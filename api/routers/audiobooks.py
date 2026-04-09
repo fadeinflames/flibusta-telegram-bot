@@ -22,7 +22,7 @@ router = APIRouter(prefix="/api/audiobooks", tags=["audiobooks"])
 
 
 @router.get("/search")
-async def search_audiobooks(q: str, limit: int = 15, user: dict = CurrentUser):
+async def search_audiobooks(q: str, limit: int = 15, user: CurrentUser):
     """Search RuTracker audiobook categories."""
     if len(q.strip()) < 2:
         raise HTTPException(400, "Query too short")
@@ -44,7 +44,7 @@ async def search_audiobooks(q: str, limit: int = 15, user: dict = CurrentUser):
 
 
 @router.get("/{topic_id}/info")
-async def get_topic_info(topic_id: str, user: dict = CurrentUser):
+async def get_topic_info(topic_id: str, user: CurrentUser):
     """Get topic info with file list."""
     info = await asyncio.to_thread(rutracker.get_topic_info, topic_id)
     if not info:
@@ -61,7 +61,7 @@ async def get_topic_info(topic_id: str, user: dict = CurrentUser):
 
 
 @router.get("/{topic_id}/files")
-async def get_topic_files(topic_id: str, user: dict = CurrentUser):
+async def get_topic_files(topic_id: str, user: CurrentUser):
     """Get structured file list with sizes."""
     files = await asyncio.to_thread(rutracker.get_topic_files, topic_id)
     return {
@@ -155,7 +155,7 @@ async def stream_audio(topic_id: str, file_index: int, request: Request, token: 
 
 
 @router.post("/{topic_id}/download")
-async def enqueue_download(topic_id: str, user: dict = CurrentUser):
+async def enqueue_download(topic_id: str, user: CurrentUser):
     """Enqueue a topic for background download."""
     user_id = int(user["id"])
     # Check if already queued
@@ -175,7 +175,7 @@ async def enqueue_download(topic_id: str, user: dict = CurrentUser):
 
 
 @router.get("/queue")
-async def get_download_queue(user: dict = CurrentUser):
+async def get_download_queue(user: CurrentUser):
     """Get current user's download queue."""
     user_id = int(user["id"])
     tasks = await asyncio.to_thread(db.rt_pending_for_user, user_id)
@@ -194,7 +194,7 @@ async def get_download_queue(user: dict = CurrentUser):
 
 
 @router.get("/progress")
-async def get_listening_progress(user: dict = CurrentUser):
+async def get_listening_progress(user: CurrentUser):
     """Get user's listening progress (currently reading audiobooks)."""
     user_id = int(user["id"])
     items = await asyncio.to_thread(db.reading_progress_list, user_id)
@@ -219,7 +219,7 @@ async def get_listening_progress(user: dict = CurrentUser):
 async def update_listening_progress(
     topic_id: str,
     body: UpdateProgressBody,
-    user: dict = CurrentUser,
+    user: CurrentUser,
 ):
     """Update current chapter for an audiobook."""
     user_id = int(user["id"])
