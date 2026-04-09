@@ -6,12 +6,17 @@ from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse, StreamingResponse
+from pydantic import BaseModel
 
 from api.auth import decode_access_token
 from api.deps import CurrentUser
 from src import database as db
 from src import rutracker
 from src.config import RUTRACKER_DOWNLOAD_DIR
+
+
+class UpdateProgressBody(BaseModel):
+    chapter: int = 0
 
 router = APIRouter(prefix="/api/audiobooks", tags=["audiobooks"])
 
@@ -213,11 +218,11 @@ async def get_listening_progress(user: dict = CurrentUser):
 @router.patch("/progress/{topic_id}")
 async def update_listening_progress(
     topic_id: str,
-    body: dict,
+    body: UpdateProgressBody,
     user: dict = CurrentUser,
 ):
     """Update current chapter for an audiobook."""
     user_id = int(user["id"])
-    chapter = body.get("chapter", 0)
+    chapter = body.chapter
     await asyncio.to_thread(db.reading_progress_update_chapter, user_id, topic_id, chapter)
     return {"status": "ok"}
