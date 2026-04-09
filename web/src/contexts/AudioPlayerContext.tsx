@@ -63,6 +63,9 @@ const PLAYBACK_RATES = [0.75, 1, 1.25, 1.5, 2]
 export function AudioPlayerProvider({ children }: { children: ReactNode }) {
   const audioRef = useRef<HTMLAudioElement | null>(null)
   const saveTimerRef = useRef<ReturnType<typeof setInterval>>()
+  const currentTrackRef = useRef<Track | null>(null)
+  const chaptersRef = useRef<{ name: string; index: number }[]>([])
+  const playRef = useRef<((track: Track, chapters?: { name: string; index: number }[]) => void) | null>(null)
 
   const [currentTrack, setCurrentTrack] = useState<Track | null>(null)
   const [isPlaying, setIsPlaying] = useState(false)
@@ -74,14 +77,30 @@ export function AudioPlayerProvider({ children }: { children: ReactNode }) {
   // Initialize audio element once
   useEffect(() => {
     const audio = new Audio()
-    audio.preload = 'metadata'
+    audio.preload = 'auto'
     audioRef.current = audio
 
     audio.addEventListener('timeupdate', () => setCurrentTime(audio.currentTime))
     audio.addEventListener('durationchange', () => setDuration(audio.duration || 0))
     audio.addEventListener('play', () => setIsPlaying(true))
     audio.addEventListener('pause', () => setIsPlaying(false))
-    audio.addEventListener('ended', () => setIsPlaying(false))
+    audio.addEventListener('ended', () => {
+      setIsPlaying(false)
+      // Auto-advance to next chapter
+      const track = currentTrackRef.current
+      const ch = chaptersRef.current
+      if (track && ch.length > 0) {
+        const idx = ch.findIndex(c => c.index === track.fileIndex)
+        if (idx >= 0 && idx < ch.length - 1) {
+          const next = ch[idx + 1]
+          playRef.current?.({ ...track, fileIndex: next.index, chapterName: next.name }, ch)
+        }
+      }
+    })
+    audio.addEventListener('error', () => {
+      console.error('[AudioPlayer] Audio error:', audio.error?.code, audio.error?.message, 'src:', audio.src)
+      setIsPlaying(false)
+    })
 
     return () => {
       audio.pause()
@@ -108,12 +127,41 @@ export function AudioPlayerProvider({ children }: { children: ReactNode }) {
     if (!audio) return
 
     const url = getStreamUrl(track.topicId, track.fileIndex)
+    console.log('[AudioPlayer] play:', url)
+
+    // Stop current playback first
+    audio.pause()
+
+    // Set source and load
     audio.src = url
+    audio.load()
     audio.playbackRate = playbackRate
-    audio.play().catch(() => {})
+
+    // Play after load starts
+    const onCanPlay = () => {
+      audio.removeEventListener('canplay', onCanPlay)
+      audio.play().catch(err => {
+        console.error('[AudioPlayer] play() failed:', err)
+        // Retry once on user-gesture-required error
+      })
+    }
+    audio.addEventListener('canplay', onCanPlay)
+
+    // Also try playing immediately (works in most cases with user gesture)
+    audio.play().catch(() => {
+      // Will retry on canplay event above
+    })
+
     setCurrentTrack(track)
-    if (newChapters) setChapters(newChapters)
+    currentTrackRef.current = track
+    if (newChapters) {
+      setChapters(newChapters)
+      chaptersRef.current = newChapters
+    }
   }, [playbackRate])
+
+  // Keep play ref updated for ended callback
+  playRef.current = play
 
   const pause = useCallback(() => {
     audioRef.current?.pause()
@@ -166,10 +214,12 @@ export function AudioPlayerProvider({ children }: { children: ReactNode }) {
       audio.src = ''
     }
     setCurrentTrack(null)
+    currentTrackRef.current = null
     setIsPlaying(false)
     setCurrentTime(0)
     setDuration(0)
     setChapters([])
+    chaptersRef.current = []
   }, [])
 
   return (
