@@ -18,11 +18,17 @@ async def get_library(user: CurrentUser, shelf: str | None = None, page: int = 1
     tag = shelf if shelf and shelf != "all" else None
 
     items, total = await asyncio.to_thread(db.get_user_favorites, user_id, offset, per_page, tag)
+
+    # Fetch covers from books_cache
+    book_ids = [f["book_id"] for f in items]
+    covers = await asyncio.to_thread(db.get_cached_covers, book_ids) if book_ids else {}
+
     favorites = [
         FavoriteItem(
             book_id=f["book_id"],
             title=f["title"],
             author=f["author"],
+            cover=covers.get(f["book_id"], ""),
             shelf=f.get("tags"),
             notes=f.get("notes"),
             added_date=f.get("added_date", ""),

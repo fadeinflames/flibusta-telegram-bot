@@ -31,6 +31,7 @@ class FavoriteItem(BaseModel):
     book_id: str
     title: str
     author: str
+    cover: str = ""
     shelf: str | None = None
     notes: str | None = None
     added_date: str = ""
@@ -52,6 +53,7 @@ class DownloadItem(BaseModel):
     book_id: str
     title: str
     author: str
+    cover: str = ""
     format: str
     download_date: str = ""
 

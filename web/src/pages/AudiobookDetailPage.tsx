@@ -45,6 +45,8 @@ export default function AudiobookDetailPage() {
   const author = titleParts.length > 1 ? titleParts[0].trim() : ''
   const bookTitle = titleParts.length > 1 ? titleParts.slice(1).join(' - ').trim() : info.data?.title || ''
 
+  const cover = (info.data as any)?.cover || ''
+
   const handlePlayChapter = (fileEntry: AudiobookFileEntry, index: number) => {
     impact('medium')
     play(
@@ -54,6 +56,7 @@ export default function AudiobookDetailPage() {
         title: bookTitle,
         author,
         chapterName: fileEntry.filename.replace(/\.[^/.]+$/, ''),
+        cover,
       },
       chapters,
     )
@@ -146,7 +149,7 @@ export default function AudiobookDetailPage() {
             className="relative z-10 pb-6"
           >
             <div
-              className="w-[130px] h-[130px] rounded-[28px] flex items-center justify-center"
+              className="w-[130px] h-[130px] rounded-[28px] flex items-center justify-center overflow-hidden"
               style={{
                 backgroundColor: 'rgba(255,255,255,0.12)',
                 backdropFilter: 'blur(16px)',
@@ -155,7 +158,11 @@ export default function AudiobookDetailPage() {
                 boxShadow: '0 16px 48px rgba(0,0,0,0.2)',
               }}
             >
-              <span className="text-[60px]">🎧</span>
+              {cover ? (
+                <img src={cover} alt={bookTitle} className="w-full h-full object-cover" />
+              ) : (
+                <span className="text-[60px]">🎧</span>
+              )}
             </div>
           </motion.div>
         </div>

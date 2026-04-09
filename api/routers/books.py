@@ -104,4 +104,9 @@ async def get_related_books(book_id: str, user: CurrentUser):
         return []
 
     related = await asyncio.to_thread(flib.get_other_books_by_author, book.author_link, book_id, 10)
-    return [BookBrief(id=b.id, title=b.title, author=b.author, cover=b.cover) for b in related]
+
+    # Enrich with covers from cache (get_other_books_by_author doesn't parse covers)
+    book_ids = [b.id for b in related]
+    covers = await asyncio.to_thread(db.get_cached_covers, book_ids) if book_ids else {}
+
+    return [BookBrief(id=b.id, title=b.title, author=b.author, cover=covers.get(b.id, "")) for b in related]

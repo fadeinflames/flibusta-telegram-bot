@@ -85,7 +85,7 @@ export default function DownloadsPage() {
                 </p>
                 {groupItems.map((item, i) => (
                   <motion.div key={`${item.book_id}-${i}`} variants={staggerItem}>
-                    <BookCard id={item.book_id} title={item.title} author={item.author} subtitle={item.format.toUpperCase()} />
+                    <BookCard id={item.book_id} title={item.title.replace(/\s*\([a-z0-9]+\)\s*$/i, '')} author={item.author} cover={item.cover} subtitle={item.format.toUpperCase()} />
                     <div className="separator mx-4" />
                   </motion.div>
                 ))}

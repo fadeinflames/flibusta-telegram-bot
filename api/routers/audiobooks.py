@@ -42,30 +42,35 @@ def _extract_search_query(title: str) -> str:
     return clean
 
 
-async def _get_flibusta_description(title: str) -> str | None:
-    """Try to find book on Flibusta and return its annotation."""
+async def _get_flibusta_metadata(title: str) -> dict:
+    """Try to find book on Flibusta and return annotation + cover."""
     query = _extract_search_query(title)
     if not query or len(query) < 3:
-        return None
+        return {}
 
-    cache_key = rt_cache.search_key(f"flib_desc:{query}")
+    cache_key = rt_cache.search_key(f"flib_meta:{query}")
     cached = rt_cache.get(cache_key)
     if cached is not None:
-        return cached.get("annotation") if cached else None
+        return cached
 
     try:
         books = await asyncio.to_thread(flib.scrape_books_by_title, query)
         if books:
-            # Get full details for the first match
             book = await asyncio.to_thread(flib.get_book_by_id, books[0].id)
-            if book and book.annotation:
-                rt_cache.set(cache_key, {"annotation": book.annotation}, rt_cache.TTL_TOPIC_INFO)
-                return book.annotation
+            if book:
+                meta = {}
+                if book.annotation:
+                    meta["annotation"] = book.annotation
+                if book.cover:
+                    meta["cover"] = book.cover
+                if meta:
+                    rt_cache.set(cache_key, meta, rt_cache.TTL_TOPIC_INFO)
+                    return meta
     except Exception:
         pass
 
     rt_cache.set(cache_key, {}, rt_cache.TTL_SEARCH)
-    return None
+    return {}
 
 
 @router.get("/search")
@@ -92,20 +97,21 @@ async def search_audiobooks(q: str, user: CurrentUser, limit: int = 15):
 
 @router.get("/{topic_id}/info")
 async def get_topic_info(topic_id: str, user: CurrentUser):
-    """Get topic info with file list. Description from Flibusta when available."""
+    """Get topic info with file list. Description and cover from Flibusta when available."""
     info = await asyncio.to_thread(rutracker.get_topic_info, topic_id)
     if not info:
         raise HTTPException(404, "Topic not found")
 
-    # Try to get a better description from Flibusta
-    description = await _get_flibusta_description(info.title)
-    if not description:
-        description = info.description
+    # Try to get metadata from Flibusta (annotation + cover)
+    flib_meta = await _get_flibusta_metadata(info.title)
+    description = flib_meta.get("annotation") or info.description
+    cover = flib_meta.get("cover", "")
 
     return {
         "topic_id": info.topic_id,
         "title": info.title,
         "description": description,
+        "cover": cover,
         "forum_name": info.forum_name,
         "topic_url": info.topic_url,
         "files": info.files,

@@ -564,6 +564,20 @@ def cache_book(book):
         conn.commit()
 
 
+def get_cached_covers(book_ids: list[str]) -> dict[str, str]:
+    """Get covers for multiple book IDs from cache. Returns {book_id: cover_url}."""
+    if not book_ids:
+        return {}
+    with get_db() as conn:
+        placeholders = ",".join("?" for _ in book_ids)
+        cursor = conn.cursor()
+        cursor.execute(
+            f"SELECT book_id, cover FROM books_cache WHERE book_id IN ({placeholders}) AND cover != ''",
+            book_ids,
+        )
+        return {row["book_id"]: row["cover"] for row in cursor.fetchall()}
+
+
 def get_cached_book(book_id: str) -> dict | None:
     """Получить книгу из кэша."""
     with get_db() as conn:

@@ -26,6 +26,7 @@ export interface FavoriteItem {
   book_id: string
   title: string
   author: string
+  cover: string
   shelf: string | null
   notes: string | null
   added_date: string
@@ -35,6 +36,7 @@ export interface DownloadItem {
   book_id: string
   title: string
   author: string
+  cover: string
   format: string
   download_date: string
 }
@@ -106,6 +108,7 @@ export interface AudiobookTopicInfo {
   topic_id: string
   title: string
   description: string
+  cover: string
   forum_name: string
   topic_url: string
   files: string[]

@@ -4,8 +4,8 @@ import { useHaptic } from '../../hooks/useTelegram'
 
 const tabs = [
   { path: '/library', label: 'Книги', icon: BookIcon },
-  { path: '/search', label: 'Поиск', icon: SearchIcon },
   { path: '/audiobooks', label: 'Аудио', icon: HeadphonesIcon },
+  { path: '/search', label: 'Поиск', icon: SearchIcon },
   { path: '/downloads', label: 'Загрузки', icon: DownloadIcon },
   { path: '/profile', label: 'Профиль', icon: PersonIcon },
 ]

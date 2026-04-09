@@ -8,6 +8,7 @@ interface Track {
   title: string
   author: string
   chapterName: string
+  cover?: string
 }
 
 interface AudioPlayerState {

@@ -209,41 +209,44 @@ export default function AudioPlayer({ open, onClose }: AudioPlayerProps) {
                     transition={{ type: 'spring', damping: 18, stiffness: 180 }}
                     className="w-[270px] h-[270px] flex items-center justify-center mb-10 relative overflow-hidden"
                     style={{
-                      background: 'linear-gradient(145deg, var(--tg-theme-button-color, #2481cc), color-mix(in srgb, var(--tg-theme-button-color, #2481cc) 50%, #7c3aed))',
+                      background: currentTrack.cover
+                        ? undefined
+                        : 'linear-gradient(145deg, var(--tg-theme-button-color, #2481cc), color-mix(in srgb, var(--tg-theme-button-color, #2481cc) 50%, #7c3aed))',
                       boxShadow: isPlaying
                         ? '0 20px 60px color-mix(in srgb, var(--tg-theme-button-color, #2481cc) 35%, transparent), 0 8px 20px color-mix(in srgb, var(--tg-theme-button-color, #2481cc) 20%, transparent)'
                         : '0 10px 30px color-mix(in srgb, var(--tg-theme-button-color, #2481cc) 20%, transparent)',
                     }}
                   >
-                    {/* Decorative rings */}
-                    <div
-                      className="absolute inset-0"
-                      style={{
-                        background: 'radial-gradient(circle at 30% 30%, rgba(255,255,255,0.15) 0%, transparent 60%)',
-                      }}
-                    />
-                    <div
-                      className="absolute w-[120px] h-[120px] rounded-full border border-white/10"
-                      style={{ top: '50%', left: '50%', transform: 'translate(-50%, -50%)' }}
-                    />
-                    <div
-                      className="absolute w-[180px] h-[180px] rounded-full border border-white/5"
-                      style={{ top: '50%', left: '50%', transform: 'translate(-50%, -50%)' }}
-                    />
-
-                    {/* Music icon */}
-                    <svg width="72" height="72" viewBox="0 0 24 24" fill="none" className="relative z-10">
-                      <path
-                        d="M9 18V5l12-2v13"
-                        stroke="white"
-                        strokeWidth="1.5"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        opacity="0.85"
+                    {currentTrack.cover ? (
+                      <img
+                        src={currentTrack.cover}
+                        alt={currentTrack.title}
+                        className="absolute inset-0 w-full h-full object-cover"
                       />
-                      <circle cx="6" cy="18" r="3" stroke="white" strokeWidth="1.5" opacity="0.85" />
-                      <circle cx="18" cy="16" r="3" stroke="white" strokeWidth="1.5" opacity="0.85" />
-                    </svg>
+                    ) : (
+                      <>
+                        {/* Decorative rings */}
+                        <div
+                          className="absolute inset-0"
+                          style={{
+                            background: 'radial-gradient(circle at 30% 30%, rgba(255,255,255,0.15) 0%, transparent 60%)',
+                          }}
+                        />
+                        <div
+                          className="absolute w-[120px] h-[120px] rounded-full border border-white/10"
+                          style={{ top: '50%', left: '50%', transform: 'translate(-50%, -50%)' }}
+                        />
+                        <div
+                          className="absolute w-[180px] h-[180px] rounded-full border border-white/5"
+                          style={{ top: '50%', left: '50%', transform: 'translate(-50%, -50%)' }}
+                        />
+                        <svg width="72" height="72" viewBox="0 0 24 24" fill="none" className="relative z-10">
+                          <path d="M9 18V5l12-2v13" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" opacity="0.85" />
+                          <circle cx="6" cy="18" r="3" stroke="white" strokeWidth="1.5" opacity="0.85" />
+                          <circle cx="18" cy="16" r="3" stroke="white" strokeWidth="1.5" opacity="0.85" />
+                        </svg>
+                      </>
+                    )}
                   </motion.div>
 
                   {/* Track info */}

@@ -78,8 +78,9 @@ export default function LibraryPage() {
                 <motion.div key={item.book_id} variants={staggerItem}>
                   <BookCard
                     id={item.book_id}
-                    title={item.title}
+                    title={item.title.replace(/\s*\([a-z0-9]+\)\s*$/i, '')}
                     author={item.author}
+                    cover={item.cover}
                     shelf={item.shelf}
                   />
                   <div
