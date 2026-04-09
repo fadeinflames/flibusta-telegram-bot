@@ -43,6 +43,55 @@ html, body {
   overflow: hidden;
 }
 
+/* ──────── App background ──────── */
+.app-bg {
+  background-color: var(--tg-theme-bg-color, #fff);
+  background-image:
+    radial-gradient(ellipse at 0% 0%, color-mix(in srgb, var(--tg-theme-button-color, #2481cc) 4%, transparent) 0%, transparent 50%),
+    radial-gradient(ellipse at 100% 100%, color-mix(in srgb, #a855f7 3%, transparent) 0%, transparent 50%);
+}
+
+/* ──────── Page header gradients ──────── */
+.page-header-library {
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--tg-theme-button-color, #2481cc) 7%, var(--tg-theme-bg-color, #fff)) 0%,
+    var(--tg-theme-bg-color, #fff) 100%
+  );
+}
+
+.page-header-search {
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, #667eea 7%, var(--tg-theme-bg-color, #fff)) 0%,
+    var(--tg-theme-bg-color, #fff) 100%
+  );
+}
+
+.page-header-audio {
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, #a855f7 7%, var(--tg-theme-bg-color, #fff)) 0%,
+    var(--tg-theme-bg-color, #fff) 100%
+  );
+}
+
+.page-header-downloads {
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, #22c55e 7%, var(--tg-theme-bg-color, #fff)) 0%,
+    var(--tg-theme-bg-color, #fff) 100%
+  );
+}
+
+.page-header-profile {
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, #f43f5e 6%, var(--tg-theme-bg-color, #fff)) 0%,
+    var(--tg-theme-bg-color, #fff) 100%
+  );
+}
+
 /* ──────── Page scroll container ──────── */
 .page-scroll {
   flex: 1 1 0%;

@@ -42,7 +42,7 @@ function Layout() {
   const isDetailPage = location.pathname.startsWith('/book/') || location.pathname.startsWith('/audiobook/') || location.pathname.startsWith('/read/')
 
   return (
-    <div className="h-full bg-tg-bg">
+    <div className="h-full app-bg">
       {/* Page content takes full height, page-scroll handles its own padding-bottom */}
       <Outlet />
       {!isDetailPage && (

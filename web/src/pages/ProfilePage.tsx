@@ -48,7 +48,7 @@ export default function ProfilePage() {
     <div className="h-full flex flex-col">
       <div className="page-scroll">
         {/* Profile header */}
-        <div className="flex flex-col items-center pt-8 pb-6 px-5">
+        <div className="flex flex-col items-center pt-8 pb-6 px-5 page-header-profile">
           <motion.div
             initial={{ scale: 0.8, opacity: 0 }}
             animate={{ scale: 1, opacity: 1 }}

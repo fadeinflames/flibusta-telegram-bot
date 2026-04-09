@@ -58,16 +58,23 @@ export default function DownloadsPage() {
       transition={pageTransition}
       className="h-full flex flex-col"
     >
-      <div className="px-4 pt-4 pb-1 flex items-end justify-between">
-        <h1 className="text-[34px] font-bold tracking-tight" style={{ color: 'var(--tg-theme-text-color, #000)' }}>
-          Загрузки
-        </h1>
-        {items.length > 0 && (
-          <motion.button whileTap={{ scale: 0.95 }} onClick={handleClear}
-            className="text-[14px] font-medium mb-1.5" style={{ color: 'var(--tg-theme-destructive-text-color, #ff3b30)' }}>
-            Очистить
-          </motion.button>
-        )}
+      <div className="px-5 pt-6 pb-2 page-header-downloads">
+        <div className="flex items-end justify-between">
+          <div>
+            <h1 className="text-[32px] font-bold tracking-tight" style={{ color: 'var(--tg-theme-text-color, #000)' }}>
+              Загрузки
+            </h1>
+            <p className="text-[14px] mt-0.5" style={{ color: 'var(--tg-theme-hint-color, #999)' }}>
+              Скачанные книги
+            </p>
+          </div>
+          {items.length > 0 && (
+            <motion.button whileTap={{ scale: 0.95 }} onClick={handleClear}
+              className="text-[14px] font-medium mb-1.5" style={{ color: 'var(--tg-theme-destructive-text-color, #ff3b30)' }}>
+              Очистить
+            </motion.button>
+          )}
+        </div>
       </div>
 
       <div className="page-scroll">

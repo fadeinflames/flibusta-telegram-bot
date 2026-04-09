@@ -53,21 +53,15 @@ export default function AudiobooksPage() {
       className="h-full flex flex-col"
     >
       {/* Header */}
-      <div className="relative px-5 pt-6 pb-2">
-        <div
-          className="absolute inset-0 pointer-events-none"
-          style={{
-            background: 'linear-gradient(180deg, color-mix(in srgb, var(--tg-theme-button-color, #2481cc) 6%, transparent) 0%, transparent 100%)',
-          }}
-        />
+      <div className="px-5 pt-6 pb-2 page-header-audio">
         <h1
-          className="relative text-[32px] font-bold tracking-tight"
+          className="text-[32px] font-bold tracking-tight"
           style={{ color: 'var(--tg-theme-text-color, #000)' }}
         >
           Аудиокниги
         </h1>
         <p
-          className="relative text-[14px] mt-0.5"
+          className="text-[14px] mt-0.5"
           style={{ color: 'var(--tg-theme-hint-color, #999)' }}
         >
           Слушайте книги онлайн

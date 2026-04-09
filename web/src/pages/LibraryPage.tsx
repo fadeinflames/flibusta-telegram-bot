@@ -49,13 +49,16 @@ export default function LibraryPage() {
       className="h-full flex flex-col"
     >
       {/* Header */}
-      <div className="px-5 pt-4 pb-1">
+      <div className="px-5 pt-6 pb-2 page-header-library">
         <h1
-          className="text-[34px] font-bold tracking-tight"
+          className="text-[32px] font-bold tracking-tight"
           style={{ color: 'var(--tg-theme-text-color, #000)' }}
         >
           Библиотека
         </h1>
+        <p className="text-[14px] mt-0.5" style={{ color: 'var(--tg-theme-hint-color, #999)' }}>
+          Ваши сохранённые книги
+        </p>
       </div>
 
       <ShelfFilter active={shelf} counts={counts.data} onChange={handleShelfChange} />
