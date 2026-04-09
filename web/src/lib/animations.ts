@@ -12,30 +12,28 @@ export const gentleSpring: Transition = {
   stiffness: 200,
 }
 
-// Page transitions for tab pages
+// Page transitions for tab pages — fast tween to avoid spring jank
 export const pageVariants: Variants = {
-  initial: { opacity: 0, y: 10 },
+  initial: { opacity: 0, y: 8 },
   animate: { opacity: 1, y: 0 },
-  exit: { opacity: 0, y: -6 },
+  exit: { opacity: 0 },
 }
 
 export const pageTransition: Transition = {
-  type: 'spring',
-  damping: 26,
-  stiffness: 260,
+  duration: 0.15,
+  ease: 'easeOut',
 }
 
-// Detail pages — slide from right
+// Detail pages — slide from right, fast tween
 export const detailVariants: Variants = {
-  initial: { x: '100%', opacity: 0.8 },
+  initial: { x: '100%', opacity: 0.9 },
   animate: { x: 0, opacity: 1 },
-  exit: { x: '100%', opacity: 0.8 },
+  exit: { x: '100%', opacity: 0.9 },
 }
 
 export const detailTransition: Transition = {
-  type: 'spring',
-  damping: 28,
-  stiffness: 240,
+  duration: 0.25,
+  ease: [0.32, 0.72, 0, 1],
 }
 
 // Staggered list container
@@ -51,11 +49,11 @@ export const staggerContainer: Variants = {
 
 // Staggered list item
 export const staggerItem: Variants = {
-  hidden: { opacity: 0, y: 12 },
+  hidden: { opacity: 0, y: 8 },
   show: {
     opacity: 1,
     y: 0,
-    transition: { type: 'spring', damping: 20, stiffness: 200 },
+    transition: { duration: 0.2, ease: 'easeOut' },
   },
 }
 

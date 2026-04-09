@@ -37,6 +37,8 @@ html, body, #root {
   overflow-x: hidden;
   -webkit-overflow-scrolling: touch;
   padding-bottom: calc(var(--bottom-nav-height) + var(--mini-player-height) + var(--safe-area-bottom) + 12px);
+  will-change: scroll-position;
+  transform: translateZ(0);
 }
 
 /* ──────── Glass morphism ──────── */
