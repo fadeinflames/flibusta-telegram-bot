@@ -11,11 +11,13 @@ from fastapi.staticfiles import StaticFiles
 
 from api.routers import auth_router, audiobooks, books, downloads, library, profile, search
 from src import database as db
+from src import rt_cache
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     db.init_database()
+    rt_cache.init_cache_table()
     yield
 
 

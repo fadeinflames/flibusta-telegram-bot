@@ -10,6 +10,7 @@ import requests
 from bs4 import BeautifulSoup
 
 from src.config import RUTRACKER_CATEGORY, RUTRACKER_PASSWORD, RUTRACKER_USERNAME
+from src import rt_cache
 
 logger = logging.getLogger(__name__)
 
@@ -130,6 +131,13 @@ def _looks_like_book(title: str) -> bool:
 
 def search(query: str, limit: int = 10) -> list[RTopic]:
     """Search RuTracker audiobook categories.  Returns up to *limit* results."""
+    # Check search cache
+    cache_key = rt_cache.search_key(f"{query}:{limit}")
+    cached = rt_cache.get(cache_key)
+    if cached:
+        logger.debug("search(%r): cache hit (%d results)", query, len(cached))
+        return [RTopic(**r) for r in cached]
+
     s = get_session()
     try:
         resp = s.post(
@@ -206,6 +214,17 @@ def search(query: str, limit: int = 10) -> list[RTopic]:
 
     # Сверху — раздачи с большим числом пиров в поиске (сиды + личи)
     results.sort(key=lambda t: (t.seeds + t.leeches, t.seeds), reverse=True)
+
+    # Cache search results
+    if results:
+        rt_cache.set(
+            cache_key,
+            [{"topic_id": r.topic_id, "title": r.title, "size": r.size,
+              "seeds": r.seeds, "leeches": r.leeches, "forum_name": r.forum_name}
+             for r in results],
+            rt_cache.TTL_SEARCH,
+        )
+
     return results
 
 
@@ -223,6 +242,13 @@ def _clean_topic_description(raw: str, max_len: int = 3500) -> str:
 
 def get_topic_info(topic_id: str) -> RTopicFiles:
     """Fetch topic page: full title, forum, long description (first post body)."""
+    # Check cache first
+    cache_key = rt_cache.topic_info_key(topic_id)
+    cached = rt_cache.get(cache_key)
+    if cached:
+        logger.debug("get_topic_info(%s): cache hit", topic_id)
+        return RTopicFiles(**cached)
+
     s = get_session()
     topic_url = f"{_BASE}/viewtopic.php?t={topic_id}"
     resp = s.get(topic_url, timeout=20)
@@ -255,13 +281,24 @@ def get_topic_info(topic_id: str) -> RTopicFiles:
     else:
         description = ""
 
-    return RTopicFiles(
+    result = RTopicFiles(
         topic_id=topic_id,
         title=title,
         description=description,
         forum_name=forum_name,
         topic_url=topic_url,
     )
+
+    # Cache the result
+    rt_cache.set(cache_key, {
+        "topic_id": result.topic_id,
+        "title": result.title,
+        "description": result.description,
+        "forum_name": result.forum_name,
+        "topic_url": result.topic_url,
+    }, rt_cache.TTL_TOPIC_INFO)
+
+    return result
 
 
 def download_torrent(topic_id: str) -> bytes:
@@ -312,6 +349,13 @@ def _bdecode(data: bytes, idx: int = 0):
 
 def get_topic_files(topic_id: str) -> list[FileEntry]:
     """Return audio files from topic torrent metadata."""
+    # Check cache first
+    cache_key = rt_cache.topic_files_key(topic_id)
+    cached = rt_cache.get(cache_key)
+    if cached:
+        logger.debug("get_topic_files(%s): cache hit", topic_id)
+        return [FileEntry(**f) for f in cached]
+
     torrent = download_torrent(topic_id)
     root, _ = _bdecode(torrent)
     info = root.get("info", {}) if isinstance(root, dict) else {}
@@ -344,6 +388,14 @@ def get_topic_files(topic_id: str) -> list[FileEntry]:
             audio_only.append(e)
     # Торрент часто отдаёт файлы не по порядку глав — сортируем по номеру в имени
     audio_only.sort(key=lambda e: _audio_sort_key(e.filename))
+
+    # Cache the result (file lists are immutable)
+    rt_cache.set(
+        cache_key,
+        [{"filename": e.filename, "size_bytes": e.size_bytes, "index_in_torrent": e.index_in_torrent} for e in audio_only],
+        rt_cache.TTL_TOPIC_FILES,
+    )
+
     return audio_only
 
 

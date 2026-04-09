@@ -53,6 +53,8 @@ from src.tg_bot_rutracker import audiobook_search_command, listening_command, no
 def main():
     # Инициализация базы данных
     db.init_database()
+    from src import rt_cache
+    rt_cache.init_cache_table()
     print("[ OK ] База данных инициализирована")
 
     # Reset downloads stuck in 'downloading' state from previous run
