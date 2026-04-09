@@ -1,6 +1,6 @@
 import { useState, useCallback, useRef, useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { motion } from 'framer-motion'
+import { motion, AnimatePresence } from 'framer-motion'
 import { api } from '../api/client'
 import { useHaptic } from '../hooks/useTelegram'
 import type { PaginatedResponse, BookBrief, SearchHistoryItem } from '../api/types'
@@ -10,6 +10,11 @@ import SkeletonCard from '../components/books/SkeletonCard'
 import EmptyState from '../components/ui/EmptyState'
 
 type SearchType = 'title' | 'author'
+
+const SEARCH_TYPES: { key: SearchType; label: string }[] = [
+  { key: 'title', label: 'По названию' },
+  { key: 'author', label: 'По автору' },
+]
 
 export default function SearchPage() {
   const [query, setQuery] = useState('')
@@ -46,30 +51,56 @@ export default function SearchPage() {
 
   const totalPages = searchResults.data ? Math.ceil(searchResults.data.total / searchResults.data.per_page) : 0
 
+  const activeIndex = SEARCH_TYPES.findIndex(t => t.key === searchType)
+
   return (
     <div className="h-full flex flex-col">
       {/* Header */}
-      <div className="px-5 pt-5 pb-1">
-        <h1 className="text-[28px] font-bold tracking-tight" style={{ color: 'var(--tg-theme-text-color, #000)' }}>
+      <div className="relative px-5 pt-6 pb-2">
+        <div
+          className="absolute inset-0 pointer-events-none"
+          style={{
+            background: 'linear-gradient(180deg, color-mix(in srgb, var(--tg-theme-button-color, #2481cc) 6%, transparent) 0%, transparent 100%)',
+          }}
+        />
+        <h1
+          className="relative text-[32px] font-bold tracking-tight"
+          style={{ color: 'var(--tg-theme-text-color, #000)' }}
+        >
           Поиск
         </h1>
+        <p
+          className="relative text-[14px] mt-0.5"
+          style={{ color: 'var(--tg-theme-hint-color, #999)' }}
+        >
+          Книги, авторы и серии
+        </p>
       </div>
 
       {/* Search input */}
-      <div className="px-4 py-2.5">
-        <div
-          className="flex items-center gap-2.5 rounded-2xl px-4 py-3 transition-all duration-200"
+      <div className="px-4 pt-2 pb-2.5">
+        <motion.div
+          animate={{
+            boxShadow: isFocused
+              ? '0 0 0 2px var(--tg-theme-button-color, #2481cc), 0 4px 20px rgba(0,0,0,0.06)'
+              : '0 0 0 0px transparent, 0 1px 4px rgba(0,0,0,0.04)',
+          }}
+          transition={{ type: 'spring', damping: 25, stiffness: 400 }}
+          className="flex items-center gap-3 rounded-2xl px-4 py-3.5"
           style={{
             backgroundColor: 'var(--tg-theme-secondary-bg-color, #f0f0f0)',
-            boxShadow: isFocused
-              ? '0 0 0 2px var(--tg-theme-button-color, #2481cc), 0 4px 16px rgba(0,0,0,0.08)'
-              : '0 1px 3px rgba(0,0,0,0.04)',
           }}
         >
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" style={{ color: 'var(--tg-theme-hint-color, #999)', flexShrink: 0 }}>
+          <motion.svg
+            animate={{
+              color: isFocused ? 'var(--tg-theme-button-color, #2481cc)' : 'var(--tg-theme-hint-color, #999)',
+            }}
+            width="20" height="20" viewBox="0 0 24 24" fill="none"
+            style={{ flexShrink: 0 }}
+          >
             <circle cx="11" cy="11" r="8" stroke="currentColor" strokeWidth="2" />
             <path d="M21 21l-4.35-4.35" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-          </svg>
+          </motion.svg>
           <input
             ref={inputRef}
             type="text"
@@ -81,60 +112,100 @@ export default function SearchPage() {
             className="flex-1 bg-transparent text-[15px] outline-none placeholder:opacity-40"
             style={{ color: 'var(--tg-theme-text-color, #000)' }}
           />
-          {query && (
-            <motion.button
-              initial={{ scale: 0 }}
-              animate={{ scale: 1 }}
-              transition={{ duration: 0.15 }}
-              onClick={() => { setQuery(''); setDebouncedQuery('') }}
-              className="w-5 h-5 rounded-full flex items-center justify-center flex-shrink-0"
-              style={{ backgroundColor: 'var(--tg-theme-hint-color, #999)' }}
-            >
-              <svg width="8" height="8" viewBox="0 0 10 10" fill="none">
-                <path d="M1 1l8 8M9 1l-8 8" stroke="var(--tg-theme-secondary-bg-color, #f0f0f0)" strokeWidth="2" strokeLinecap="round" />
-              </svg>
-            </motion.button>
-          )}
+          <AnimatePresence>
+            {query && (
+              <motion.button
+                initial={{ scale: 0, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                exit={{ scale: 0, opacity: 0 }}
+                transition={{ type: 'spring', damping: 20, stiffness: 400 }}
+                onClick={() => { setQuery(''); setDebouncedQuery('') }}
+                className="w-[22px] h-[22px] rounded-full flex items-center justify-center flex-shrink-0"
+                style={{ backgroundColor: 'var(--tg-theme-hint-color, #999)' }}
+              >
+                <svg width="8" height="8" viewBox="0 0 10 10" fill="none">
+                  <path d="M1 1l8 8M9 1l-8 8" stroke="var(--tg-theme-secondary-bg-color, #f0f0f0)" strokeWidth="2" strokeLinecap="round" />
+                </svg>
+              </motion.button>
+            )}
+          </AnimatePresence>
+        </motion.div>
+      </div>
+
+      {/* Search type toggle -- iOS segmented control */}
+      <div className="px-4 pb-3">
+        <div
+          className="relative flex p-[3px] rounded-[14px]"
+          style={{ backgroundColor: 'var(--tg-theme-secondary-bg-color, #f0f0f0)' }}
+        >
+          {/* Animated sliding indicator */}
+          <motion.div
+            className="absolute top-[3px] bottom-[3px] rounded-[11px]"
+            style={{
+              width: `calc(${100 / SEARCH_TYPES.length}% - 3px)`,
+              backgroundColor: 'var(--tg-theme-bg-color, #fff)',
+              boxShadow: '0 1px 4px rgba(0,0,0,0.08), 0 0.5px 1px rgba(0,0,0,0.04)',
+            }}
+            animate={{ left: `calc(${activeIndex * (100 / SEARCH_TYPES.length)}% + 1.5px)` }}
+            transition={{ type: 'spring', damping: 28, stiffness: 380 }}
+          />
+          {SEARCH_TYPES.map(type => {
+            const isActive = searchType === type.key
+            return (
+              <button
+                key={type.key}
+                onClick={() => {
+                  selection()
+                  setSearchType(type.key)
+                  setPage(1)
+                  if (debouncedQuery) setDebouncedQuery(query.trim())
+                }}
+                className="relative flex-1 py-2 text-[13px] font-semibold text-center z-10 transition-colors duration-200"
+                style={{
+                  color: isActive
+                    ? 'var(--tg-theme-text-color, #000)'
+                    : 'var(--tg-theme-hint-color, #999)',
+                }}
+              >
+                {type.label}
+              </button>
+            )
+          })}
         </div>
       </div>
 
-      {/* Search type toggle */}
-      <div className="flex gap-2 px-4 pb-3">
-        {(['title', 'author'] as SearchType[]).map(type => {
-          const isActive = searchType === type
-          const label = type === 'title' ? 'По названию' : 'По автору'
-          return (
-            <button
-              key={type}
-              onClick={() => { selection(); setSearchType(type); setPage(1); if (debouncedQuery) setDebouncedQuery(query.trim()) }}
-              className="px-4 py-2 rounded-xl text-[13px] font-semibold transition-all duration-200"
-              style={{
-                color: isActive ? 'var(--tg-theme-button-text-color, #fff)' : 'var(--tg-theme-text-color, #000)',
-                backgroundColor: isActive
-                  ? 'var(--tg-theme-button-color, #2481cc)'
-                  : 'var(--tg-theme-secondary-bg-color, #f0f0f0)',
-              }}
-            >
-              {label}
-            </button>
-          )
-        })}
-      </div>
-
-      {/* Results */}
+      {/* Results area */}
       <div className="page-scroll">
         {debouncedQuery ? (
           (searchResults.isLoading || searchResults.isFetching) ? (
-            <div className="px-1">{[...Array(5)].map((_, i) => <SkeletonCard key={i} delay={i * 60} />)}</div>
+            <div className="px-1">
+              {[...Array(5)].map((_, i) => <SkeletonCard key={i} delay={i * 60} />)}
+            </div>
           ) : searchResults.isError ? (
-            <EmptyState icon="⚠️" title="Ошибка поиска" subtitle="Не удалось выполнить поиск. Попробуйте ещё раз." />
+            <EmptyState
+              icon="⚠️"
+              title="Ошибка поиска"
+              subtitle="Не удалось выполнить поиск. Попробуйте ещё раз."
+            />
           ) : !searchResults.data || searchResults.data.items.length === 0 ? (
-            <EmptyState icon="🔍" title="Ничего не найдено" subtitle={`По запросу «${debouncedQuery}» результатов нет`} />
+            <EmptyState
+              icon="🔍"
+              title="Ничего не найдено"
+              subtitle={`По запросу «${debouncedQuery}» результатов нет`}
+            />
           ) : (
             <>
-              <p className="px-5 pb-2 text-[13px] font-medium" style={{ color: 'var(--tg-theme-hint-color, #999)' }}>
+              {/* Results count */}
+              <motion.p
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                className="px-5 pb-2 text-[13px] font-medium"
+                style={{ color: 'var(--tg-theme-hint-color, #999)' }}
+              >
                 Найдено: {searchResults.data.total}
-              </p>
+              </motion.p>
+
+              {/* Results list */}
               <motion.div variants={staggerContainer} initial="hidden" animate="show">
                 {searchResults.data.items.map((book: BookBrief) => (
                   <motion.div key={book.id} variants={staggerItem}>
@@ -143,60 +214,146 @@ export default function SearchPage() {
                   </motion.div>
                 ))}
               </motion.div>
+
+              {/* Pagination */}
               {totalPages > 1 && (
-                <div className="flex justify-center items-center gap-3 py-5">
-                  <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page <= 1}
-                    className="px-4 py-2 rounded-xl text-[13px] font-semibold disabled:opacity-20 transition-opacity"
-                    style={{ backgroundColor: 'var(--tg-theme-secondary-bg-color)', color: 'var(--tg-theme-text-color)' }}>
-                    Назад
-                  </button>
-                  <span className="text-[13px] font-medium tabular-nums" style={{ color: 'var(--tg-theme-hint-color)' }}>
-                    {page} / {totalPages}
-                  </span>
-                  <button onClick={() => setPage(p => Math.min(totalPages, p + 1))} disabled={page >= totalPages}
-                    className="px-4 py-2 rounded-xl text-[13px] font-semibold disabled:opacity-20 transition-opacity"
-                    style={{ backgroundColor: 'var(--tg-theme-secondary-bg-color)', color: 'var(--tg-theme-text-color)' }}>
-                    Далее
-                  </button>
-                </div>
+                <motion.div
+                  initial={{ opacity: 0, y: 8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: 0.2 }}
+                  className="flex justify-center items-center gap-4 py-6"
+                >
+                  <motion.button
+                    whileTap={{ scale: 0.95 }}
+                    onClick={() => setPage(p => Math.max(1, p - 1))}
+                    disabled={page <= 1}
+                    className="w-10 h-10 rounded-full flex items-center justify-center disabled:opacity-20 transition-all"
+                    style={{
+                      backgroundColor: 'var(--tg-theme-secondary-bg-color)',
+                      color: 'var(--tg-theme-text-color)',
+                    }}
+                  >
+                    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                      <path d="M10 3L5 8l5 5" />
+                    </svg>
+                  </motion.button>
+
+                  <div className="flex items-center gap-1.5">
+                    <span
+                      className="text-[15px] font-bold tabular-nums"
+                      style={{ color: 'var(--tg-theme-button-color, #2481cc)' }}
+                    >
+                      {page}
+                    </span>
+                    <span className="text-[13px]" style={{ color: 'var(--tg-theme-hint-color, #999)' }}>
+                      /
+                    </span>
+                    <span className="text-[13px] tabular-nums" style={{ color: 'var(--tg-theme-hint-color, #999)' }}>
+                      {totalPages}
+                    </span>
+                  </div>
+
+                  <motion.button
+                    whileTap={{ scale: 0.95 }}
+                    onClick={() => setPage(p => Math.min(totalPages, p + 1))}
+                    disabled={page >= totalPages}
+                    className="w-10 h-10 rounded-full flex items-center justify-center disabled:opacity-20 transition-all"
+                    style={{
+                      backgroundColor: 'var(--tg-theme-secondary-bg-color)',
+                      color: 'var(--tg-theme-text-color)',
+                    }}
+                  >
+                    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                      <path d="M6 3l5 5-5 5" />
+                    </svg>
+                  </motion.button>
+                </motion.div>
               )}
             </>
           )
         ) : (
           <>
-            {/* Search history */}
+            {/* Search history chips */}
             {history.data?.items && history.data.items.length > 0 && (
-              <div className="px-5 mt-2">
-                <p className="text-[13px] font-semibold mb-3 uppercase tracking-wider"
-                  style={{ color: 'var(--tg-theme-section-header-text-color, #6d6d72)' }}>
-                  Недавние запросы
-                </p>
+              <motion.div
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.05 }}
+                className="px-5 mt-3"
+              >
+                <div className="flex items-center gap-2 mb-3">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
+                    style={{ color: 'var(--tg-theme-hint-color, #999)' }}>
+                    <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="1.5" />
+                    <path d="M12 7v5l3 3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+                  </svg>
+                  <p
+                    className="text-[13px] font-semibold uppercase tracking-wider"
+                    style={{ color: 'var(--tg-theme-section-header-text-color, #6d6d72)' }}
+                  >
+                    Недавние запросы
+                  </p>
+                </div>
                 <div className="flex flex-wrap gap-2">
                   {history.data.items.slice(0, 10).map((h: SearchHistoryItem, i: number) => (
-                    <button
+                    <motion.button
                       key={i}
+                      initial={{ opacity: 0, scale: 0.9 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      transition={{ delay: i * 0.03 }}
+                      whileTap={{ scale: 0.93 }}
                       onClick={() => { selection(); setQuery(h.query); setDebouncedQuery(h.query) }}
-                      className="px-3.5 py-2 rounded-xl text-[13px] font-medium transition-transform active:scale-95"
-                      style={{ backgroundColor: 'var(--tg-theme-secondary-bg-color, #f0f0f0)', color: 'var(--tg-theme-text-color, #000)' }}
+                      className="px-3.5 py-2 rounded-xl text-[13px] font-medium glass-border"
+                      style={{
+                        backgroundColor: 'color-mix(in srgb, var(--tg-theme-secondary-bg-color, #f0f0f0) 80%, var(--tg-theme-button-color, #2481cc) 5%)',
+                        color: 'var(--tg-theme-text-color, #000)',
+                      }}
                     >
                       {h.query}
-                    </button>
+                    </motion.button>
                   ))}
                 </div>
-              </div>
+              </motion.div>
             )}
 
-            {/* Quick start hint */}
+            {/* Empty state -- no history */}
             {(!history.data?.items || history.data.items.length === 0) && (
-              <div className="flex flex-col items-center justify-center pt-20 px-8">
-                <div className="text-[48px] mb-4 opacity-60">📖</div>
-                <p className="text-[16px] font-semibold text-center" style={{ color: 'var(--tg-theme-text-color, #000)' }}>
+              <motion.div
+                initial={{ opacity: 0, y: 16 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.1, type: 'spring', damping: 20, stiffness: 200 }}
+                className="flex flex-col items-center justify-center pt-16 px-8"
+              >
+                {/* Decorative icon cluster */}
+                <div className="relative mb-6">
+                  <motion.div
+                    animate={{ y: [0, -5, 0] }}
+                    transition={{ duration: 4, repeat: Infinity, ease: 'easeInOut' }}
+                    className="w-[80px] h-[80px] rounded-[22px] flex items-center justify-center"
+                    style={{
+                      background: 'linear-gradient(135deg, color-mix(in srgb, var(--tg-theme-button-color, #2481cc) 15%, transparent), color-mix(in srgb, var(--tg-theme-button-color, #2481cc) 8%, transparent))',
+                    }}
+                  >
+                    <svg width="36" height="36" viewBox="0 0 24 24" fill="none"
+                      style={{ color: 'var(--tg-theme-button-color, #2481cc)' }}>
+                      <circle cx="11" cy="11" r="8" stroke="currentColor" strokeWidth="1.5" />
+                      <path d="M21 21l-4.35-4.35" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+                    </svg>
+                  </motion.div>
+                </div>
+                <p
+                  className="text-[18px] font-bold text-center"
+                  style={{ color: 'var(--tg-theme-text-color, #000)' }}
+                >
                   Найдите свою книгу
                 </p>
-                <p className="text-[14px] text-center mt-1.5 max-w-[260px]" style={{ color: 'var(--tg-theme-hint-color, #999)' }}>
-                  Введите название книги или имя автора для поиска
+                <p
+                  className="text-[14px] text-center mt-2 max-w-[260px] leading-relaxed"
+                  style={{ color: 'var(--tg-theme-hint-color, #999)' }}
+                >
+                  Введите название или имя автора, и мы найдем нужное издание
                 </p>
-              </div>
+              </motion.div>
             )}
           </>
         )}

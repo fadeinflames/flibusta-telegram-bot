@@ -9,6 +9,14 @@ import BookCard from '../components/books/BookCard'
 import SkeletonCard from '../components/books/SkeletonCard'
 import EmptyState from '../components/ui/EmptyState'
 
+const SHELF_EMPTY: Record<ShelfKey, { icon: string; title: string; subtitle: string }> = {
+  all: { icon: '📚', title: 'Ваша библиотека пока пуста', subtitle: 'Найдите книгу через поиск и добавьте её сюда' },
+  want: { icon: '📕', title: 'Нет книг в списке желаний', subtitle: 'Добавляйте книги, которые хотите прочитать' },
+  reading: { icon: '📗', title: 'Вы ещё ничего не читаете', subtitle: 'Начните читать книгу из вашей библиотеки' },
+  done: { icon: '📘', title: 'Нет прочитанных книг', subtitle: 'Завершённые книги появятся здесь' },
+  recommend: { icon: '📙', title: 'Нет рекомендаций', subtitle: 'Рекомендуйте книги, которые понравились' },
+}
+
 export default function LibraryPage() {
   const [shelf, setShelf] = useState<ShelfKey>('all')
   const [page, setPage] = useState(1)
@@ -29,14 +37,7 @@ export default function LibraryPage() {
   }
 
   const totalPages = library.data ? Math.ceil(library.data.total / library.data.per_page) : 0
-
-  const emptyMessages: Record<ShelfKey, string> = {
-    all: 'Ваша библиотека пока пуста',
-    want: 'Нет книг в списке желаний',
-    reading: 'Вы ещё не начали ничего читать',
-    done: 'Нет прочитанных книг',
-    recommend: 'Нет рекомендаций',
-  }
+  const emptyState = SHELF_EMPTY[shelf]
 
   return (
     <motion.div
@@ -47,8 +48,12 @@ export default function LibraryPage() {
       transition={pageTransition}
       className="h-full flex flex-col"
     >
-      <div className="px-4 pt-4 pb-1">
-        <h1 className="text-[34px] font-bold tracking-tight" style={{ color: 'var(--tg-theme-text-color, #000)' }}>
+      {/* Header */}
+      <div className="px-5 pt-4 pb-1">
+        <h1
+          className="text-[34px] font-bold tracking-tight"
+          style={{ color: 'var(--tg-theme-text-color, #000)' }}
+        >
           Библиотека
         </h1>
       </div>
@@ -57,14 +62,14 @@ export default function LibraryPage() {
 
       <div className="page-scroll">
         {library.isLoading && !library.isError && !library.failureCount ? (
-          <div>
+          <div className="px-1">
             {[...Array(5)].map((_, i) => <SkeletonCard key={i} delay={i * 60} />)}
           </div>
         ) : !library.data?.items?.length ? (
           <EmptyState
-            icon="📚"
-            title={emptyMessages[shelf]}
-            subtitle="Найдите книгу через поиск и добавьте в библиотеку"
+            icon={emptyState.icon}
+            title={emptyState.title}
+            subtitle={emptyState.subtitle}
           />
         ) : (
           <>
@@ -77,12 +82,17 @@ export default function LibraryPage() {
                     author={item.author}
                     shelf={item.shelf}
                   />
-                  <div className="separator mx-4" />
+                  <div
+                    className="mx-5 h-px"
+                    style={{ backgroundColor: 'color-mix(in srgb, var(--tg-theme-text-color, #000) 6%, transparent)' }}
+                  />
                 </motion.div>
               ))}
             </motion.div>
 
-            {totalPages > 1 && <Pagination page={page} totalPages={totalPages} onPageChange={setPage} />}
+            {totalPages > 1 && (
+              <Pagination page={page} totalPages={totalPages} onPageChange={setPage} />
+            )}
           </>
         )}
       </div>
@@ -92,29 +102,71 @@ export default function LibraryPage() {
 
 function Pagination({ page, totalPages, onPageChange }: { page: number; totalPages: number; onPageChange: (p: number) => void }) {
   return (
-    <div className="flex justify-center items-center gap-4 py-5">
-      <PaginationButton label="Назад" disabled={page <= 1} onClick={() => onPageChange(page - 1)} />
-      <span className="text-[13px] font-medium" style={{ color: 'var(--tg-theme-hint-color, #999)' }}>
-        {page} / {totalPages}
-      </span>
-      <PaginationButton label="Далее" disabled={page >= totalPages} onClick={() => onPageChange(page + 1)} />
-    </div>
-  )
-}
+    <div className="flex justify-center items-center gap-3 py-6 px-5">
+      <motion.button
+        whileTap={{ scale: 0.94 }}
+        onClick={() => onPageChange(page - 1)}
+        disabled={page <= 1}
+        className="w-10 h-10 rounded-full flex items-center justify-center disabled:opacity-20 transition-opacity"
+        style={{
+          backgroundColor: 'var(--tg-theme-secondary-bg-color, #f0f0f0)',
+          color: 'var(--tg-theme-text-color, #000)',
+        }}
+      >
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M15 18l-6-6 6-6" />
+        </svg>
+      </motion.button>
 
-function PaginationButton({ label, disabled, onClick }: { label: string; disabled: boolean; onClick: () => void }) {
-  return (
-    <motion.button
-      whileTap={{ scale: 0.95 }}
-      onClick={onClick}
-      disabled={disabled}
-      className="px-4 py-2 rounded-full text-[13px] font-semibold disabled:opacity-25 transition-opacity"
-      style={{
-        backgroundColor: 'var(--tg-theme-secondary-bg-color, #f0f0f0)',
-        color: 'var(--tg-theme-text-color, #000)',
-      }}
-    >
-      {label}
-    </motion.button>
+      <div className="flex items-center gap-1.5">
+        {Array.from({ length: Math.min(totalPages, 5) }, (_, i) => {
+          let pageNum: number
+          if (totalPages <= 5) {
+            pageNum = i + 1
+          } else if (page <= 3) {
+            pageNum = i + 1
+          } else if (page >= totalPages - 2) {
+            pageNum = totalPages - 4 + i
+          } else {
+            pageNum = page - 2 + i
+          }
+
+          const isActive = pageNum === page
+          return (
+            <motion.button
+              key={pageNum}
+              whileTap={{ scale: 0.9 }}
+              onClick={() => onPageChange(pageNum)}
+              className="w-9 h-9 rounded-full flex items-center justify-center text-[14px] font-semibold transition-all duration-200"
+              style={{
+                backgroundColor: isActive
+                  ? 'var(--tg-theme-button-color, #2481cc)'
+                  : 'transparent',
+                color: isActive
+                  ? 'var(--tg-theme-button-text-color, #fff)'
+                  : 'var(--tg-theme-hint-color, #999)',
+              }}
+            >
+              {pageNum}
+            </motion.button>
+          )
+        })}
+      </div>
+
+      <motion.button
+        whileTap={{ scale: 0.94 }}
+        onClick={() => onPageChange(page + 1)}
+        disabled={page >= totalPages}
+        className="w-10 h-10 rounded-full flex items-center justify-center disabled:opacity-20 transition-opacity"
+        style={{
+          backgroundColor: 'var(--tg-theme-secondary-bg-color, #f0f0f0)',
+          color: 'var(--tg-theme-text-color, #000)',
+        }}
+      >
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M9 18l6-6-6-6" />
+        </svg>
+      </motion.button>
+    </div>
   )
 }
