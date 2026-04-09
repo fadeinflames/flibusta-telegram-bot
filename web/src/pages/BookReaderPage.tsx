@@ -189,14 +189,44 @@ function escapeHtml(text: string): string {
 /* ────── Reader Component ────── */
 
 const FONT_SIZES = [14, 16, 18, 20, 22, 24]
+const LINE_HEIGHTS = [1.4, 1.6, 1.8, 2.0]
 const STORAGE_KEY = 'fb2_reader_settings'
+
+type ReaderTheme = 'light' | 'sepia' | 'dark'
+type FontFamily = 'system' | 'serif' | 'mono'
+
+const THEME_STYLES: Record<ReaderTheme, { bg: string; text: string; accent: string; secondary: string }> = {
+  light: { bg: '#ffffff', text: '#1a1a1a', accent: '#2481cc', secondary: '#f5f5f5' },
+  sepia: { bg: '#f8f1e3', text: '#3d3229', accent: '#8b6914', secondary: '#efe6d5' },
+  dark: { bg: '#1c1c1e', text: '#e5e5e7', accent: '#64a8e8', secondary: '#2c2c2e' },
+}
+
+const FONT_FAMILIES: Record<FontFamily, string> = {
+  system: "-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', sans-serif",
+  serif: "Georgia, 'Times New Roman', 'Noto Serif', serif",
+  mono: "'SF Mono', 'Menlo', 'Courier New', monospace",
+}
+
+const FONT_FAMILY_LABELS: Record<FontFamily, string> = {
+  system: 'Sans',
+  serif: 'Serif',
+  mono: 'Mono',
+}
 
 interface ReadingPosition {
   chapter: number
   scrollPercent: number
 }
 
-function loadSettings(): { fontSize: number; progress: Record<string, ReadingPosition> } {
+interface ReaderSettings {
+  fontSize: number
+  lineHeight: number
+  fontFamily: FontFamily
+  theme: ReaderTheme
+  progress: Record<string, ReadingPosition>
+}
+
+function loadSettings(): ReaderSettings {
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
     if (raw) {
@@ -209,13 +239,19 @@ function loadSettings(): { fontSize: number; progress: Record<string, ReadingPos
           }
         }
       }
-      return parsed
+      return {
+        fontSize: parsed.fontSize ?? 18,
+        lineHeight: parsed.lineHeight ?? 1.8,
+        fontFamily: parsed.fontFamily ?? 'system',
+        theme: parsed.theme ?? 'light',
+        progress: parsed.progress ?? {},
+      }
     }
   } catch { /* ignore */ }
-  return { fontSize: 18, progress: {} }
+  return { fontSize: 18, lineHeight: 1.8, fontFamily: 'system', theme: 'light', progress: {} }
 }
 
-function saveSettings(settings: { fontSize: number; progress: Record<string, ReadingPosition> }) {
+function saveSettings(settings: ReaderSettings) {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(settings))
   } catch { /* ignore */ }
@@ -229,11 +265,17 @@ export default function BookReaderPage() {
 
   const settings = useMemo(() => loadSettings(), [])
   const [fontSize, setFontSize] = useState(settings.fontSize)
+  const [lineHeight, setLineHeight] = useState(settings.lineHeight)
+  const [fontFamily, setFontFamily] = useState<FontFamily>(settings.fontFamily)
+  const [readerTheme, setReaderTheme] = useState<ReaderTheme>(settings.theme)
   const [currentChapter, setCurrentChapter] = useState(0)
   const [showControls, setShowControls] = useState(true)
   const [showToc, setShowToc] = useState(false)
+  const [showSettings, setShowSettings] = useState(false)
   const contentRef = useRef<HTMLDivElement>(null)
   const restoredRef = useRef(false)
+
+  const themeColors = THEME_STYLES[readerTheme]
 
   // Fetch book metadata for title
   const book = useQuery<BookDetail>({
@@ -284,7 +326,7 @@ export default function BookReaderPage() {
     }
   }, [fb2, id, settings])
 
-  // Save progress on chapter change (only after restore)
+  // Save progress on chapter/settings change (only after restore)
   useEffect(() => {
     if (id && fb2 && restoredRef.current) {
       const el = contentRef.current
@@ -294,9 +336,12 @@ export default function BookReaderPage() {
       const s = loadSettings()
       s.progress[id] = { chapter: currentChapter, scrollPercent }
       s.fontSize = fontSize
+      s.lineHeight = lineHeight
+      s.fontFamily = fontFamily
+      s.theme = readerTheme
       saveSettings(s)
     }
-  }, [currentChapter, fontSize, id, fb2])
+  }, [currentChapter, fontSize, lineHeight, fontFamily, readerTheme, id, fb2])
 
   // Save scroll position periodically
   useEffect(() => {
@@ -387,7 +432,7 @@ export default function BookReaderPage() {
   const hasNext = currentChapter < fb2.chapters.length - 1
 
   return (
-    <div className="h-full flex flex-col" style={{ backgroundColor: 'var(--tg-theme-bg-color, #fff)' }}>
+    <div className="h-full flex flex-col" style={{ backgroundColor: themeColors.bg, transition: 'background-color 0.3s ease' }}>
       {/* Top bar */}
       <motion.div
         initial={false}
@@ -395,31 +440,43 @@ export default function BookReaderPage() {
         transition={{ duration: 0.2 }}
         className="flex-shrink-0 flex items-center gap-2 px-3 h-[52px] z-30"
         style={{
-          backgroundColor: 'var(--tg-theme-bg-color, #fff)',
-          borderBottom: '0.5px solid color-mix(in srgb, var(--tg-theme-text-color, #000) 8%, transparent)',
+          backgroundColor: themeColors.bg,
+          borderBottom: `0.5px solid ${readerTheme === 'dark' ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.08)'}`,
+          transition: 'background-color 0.3s ease',
         }}
       >
-        <button onClick={goBack} className="w-10 h-10 flex items-center justify-center rounded-full" style={{ color: 'var(--tg-theme-button-color, #2481cc)' }}>
+        <button onClick={goBack} className="w-10 h-10 flex items-center justify-center rounded-full" style={{ color: themeColors.accent }}>
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
             <path d="M15 18l-6-6 6-6" />
           </svg>
         </button>
 
         <div className="flex-1 min-w-0 text-center">
-          <p className="text-[14px] font-semibold truncate" style={{ color: 'var(--tg-theme-text-color, #000)' }}>
+          <p className="text-[14px] font-semibold truncate" style={{ color: themeColors.text }}>
             {book.data?.title || fb2.title}
           </p>
           {fb2.chapters.length > 1 && (
-            <p className="text-[11px]" style={{ color: 'var(--tg-theme-hint-color, #999)' }}>
+            <p className="text-[11px]" style={{ color: `${themeColors.text}88` }}>
               {currentChapter + 1} / {fb2.chapters.length}
             </p>
           )}
         </div>
 
         <button
+          onClick={(e) => { e.stopPropagation(); setShowSettings(true) }}
+          className="w-10 h-10 flex items-center justify-center rounded-full"
+          style={{ color: themeColors.accent }}
+        >
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="12" cy="12" r="3" />
+            <path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83" />
+          </svg>
+        </button>
+
+        <button
           onClick={() => setShowToc(true)}
           className="w-10 h-10 flex items-center justify-center rounded-full"
-          style={{ color: 'var(--tg-theme-button-color, #2481cc)' }}
+          style={{ color: themeColors.accent }}
         >
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <line x1="3" y1="6" x2="21" y2="6" />
@@ -443,8 +500,10 @@ export default function BookReaderPage() {
           style={{
             maxWidth: '680px',
             fontSize: `${fontSize}px`,
-            lineHeight: 1.7,
-            color: 'var(--tg-theme-text-color, #000)',
+            lineHeight: lineHeight,
+            fontFamily: FONT_FAMILIES[fontFamily],
+            color: themeColors.text,
+            transition: 'color 0.3s ease',
           }}
         >
           {chapter.title && (
@@ -452,7 +511,7 @@ export default function BookReaderPage() {
               className="font-bold text-center mb-8"
               style={{
                 fontSize: `${fontSize + 4}px`,
-                color: 'var(--tg-theme-text-color, #000)',
+                color: themeColors.text,
               }}
             >
               {chapter.title}
@@ -514,48 +573,182 @@ export default function BookReaderPage() {
       {/* Bottom toolbar */}
       <motion.div
         initial={false}
-        animate={{ y: showControls ? 0 : 80, opacity: showControls ? 1 : 0 }}
+        animate={{ y: showControls ? 0 : 60, opacity: showControls ? 1 : 0 }}
         transition={{ duration: 0.2 }}
-        className="flex-shrink-0 flex items-center justify-center gap-6 px-5 h-[56px]"
+        className="flex-shrink-0"
         style={{
-          backgroundColor: 'var(--tg-theme-bg-color, #fff)',
-          borderTop: '0.5px solid color-mix(in srgb, var(--tg-theme-text-color, #000) 8%, transparent)',
+          backgroundColor: themeColors.bg,
+          borderTop: `0.5px solid ${readerTheme === 'dark' ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.08)'}`,
           paddingBottom: 'var(--safe-area-bottom, 0px)',
+          transition: 'background-color 0.3s ease',
         }}
       >
-        {/* Font size controls */}
-        <button
-          onClick={(e) => { e.stopPropagation(); handleFontSize(-1) }}
-          disabled={fontSize <= FONT_SIZES[0]}
-          className="w-10 h-10 flex items-center justify-center rounded-full disabled:opacity-25 transition-opacity"
-          style={{ color: 'var(--tg-theme-text-color, #000)' }}
-        >
-          <span className="text-[14px] font-bold">A-</span>
-        </button>
-
-        <span className="text-[13px] font-medium min-w-[30px] text-center" style={{ color: 'var(--tg-theme-hint-color, #999)' }}>
-          {fontSize}
-        </span>
-
-        <button
-          onClick={(e) => { e.stopPropagation(); handleFontSize(1) }}
-          disabled={fontSize >= FONT_SIZES[FONT_SIZES.length - 1]}
-          className="w-10 h-10 flex items-center justify-center rounded-full disabled:opacity-25 transition-opacity"
-          style={{ color: 'var(--tg-theme-text-color, #000)' }}
-        >
-          <span className="text-[18px] font-bold">A+</span>
-        </button>
-
-        {/* Progress indicator */}
+        {/* Progress bar */}
         {fb2.chapters.length > 1 && (
-          <>
-            <div className="w-px h-6" style={{ backgroundColor: 'color-mix(in srgb, var(--tg-theme-text-color, #000) 12%, transparent)' }} />
-            <span className="text-[13px] font-semibold" style={{ color: 'var(--tg-theme-hint-color, #999)' }}>
-              {Math.round(((currentChapter + 1) / fb2.chapters.length) * 100)}%
-            </span>
-          </>
+          <div className="px-5 pt-2">
+            <div className="h-[3px] rounded-full overflow-hidden" style={{ backgroundColor: `${themeColors.text}15` }}>
+              <div
+                className="h-full rounded-full"
+                style={{
+                  width: `${((currentChapter + 1) / fb2.chapters.length) * 100}%`,
+                  backgroundColor: themeColors.accent,
+                  transition: 'width 0.3s ease',
+                }}
+              />
+            </div>
+          </div>
         )}
+        <div className="flex items-center justify-between px-5 h-[44px]">
+          <span className="text-[12px] font-medium" style={{ color: `${themeColors.text}66` }}>
+            {fb2.chapters.length > 1 ? `${currentChapter + 1} / ${fb2.chapters.length}` : ''}
+          </span>
+          <span className="text-[12px] font-medium" style={{ color: `${themeColors.text}66` }}>
+            {fb2.chapters.length > 1 ? `${Math.round(((currentChapter + 1) / fb2.chapters.length) * 100)}%` : ''}
+          </span>
+        </div>
       </motion.div>
+
+      {/* Settings panel */}
+      {showSettings && (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          className="fixed inset-0 z-50"
+          onClick={() => setShowSettings(false)}
+        >
+          <div className="absolute inset-0" style={{ backgroundColor: 'rgba(0,0,0,0.4)' }} />
+          <motion.div
+            initial={{ y: '100%' }}
+            animate={{ y: 0 }}
+            transition={{ type: 'spring', damping: 28, stiffness: 300 }}
+            onClick={(e) => e.stopPropagation()}
+            className="absolute bottom-0 left-0 right-0 rounded-t-[20px] px-5 pt-5 pb-8"
+            style={{
+              backgroundColor: themeColors.bg,
+              paddingBottom: 'calc(var(--safe-area-bottom, 0px) + 24px)',
+            }}
+          >
+            {/* Handle */}
+            <div className="flex justify-center mb-5">
+              <div className="w-9 h-1 rounded-full" style={{ backgroundColor: `${themeColors.text}20` }} />
+            </div>
+
+            {/* Font size */}
+            <div className="mb-5">
+              <p className="text-[12px] font-semibold uppercase tracking-wider mb-3" style={{ color: `${themeColors.text}66` }}>
+                Размер шрифта
+              </p>
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={() => handleFontSize(-1)}
+                  disabled={fontSize <= FONT_SIZES[0]}
+                  className="w-10 h-10 rounded-xl flex items-center justify-center disabled:opacity-25"
+                  style={{ backgroundColor: themeColors.secondary, color: themeColors.text }}
+                >
+                  <span className="text-[13px] font-bold">A</span>
+                </button>
+                <div className="flex-1 h-[6px] rounded-full overflow-hidden" style={{ backgroundColor: themeColors.secondary }}>
+                  <div
+                    className="h-full rounded-full"
+                    style={{
+                      width: `${((FONT_SIZES.indexOf(fontSize)) / (FONT_SIZES.length - 1)) * 100}%`,
+                      backgroundColor: themeColors.accent,
+                      transition: 'width 0.2s ease',
+                    }}
+                  />
+                </div>
+                <button
+                  onClick={() => handleFontSize(1)}
+                  disabled={fontSize >= FONT_SIZES[FONT_SIZES.length - 1]}
+                  className="w-10 h-10 rounded-xl flex items-center justify-center disabled:opacity-25"
+                  style={{ backgroundColor: themeColors.secondary, color: themeColors.text }}
+                >
+                  <span className="text-[18px] font-bold">A</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Line height */}
+            <div className="mb-5">
+              <p className="text-[12px] font-semibold uppercase tracking-wider mb-3" style={{ color: `${themeColors.text}66` }}>
+                Межстрочный интервал
+              </p>
+              <div className="flex gap-2">
+                {LINE_HEIGHTS.map((lh) => (
+                  <button
+                    key={lh}
+                    onClick={() => setLineHeight(lh)}
+                    className="flex-1 py-2.5 rounded-xl text-[13px] font-semibold transition-all"
+                    style={{
+                      backgroundColor: lineHeight === lh ? themeColors.accent : themeColors.secondary,
+                      color: lineHeight === lh ? '#fff' : themeColors.text,
+                    }}
+                  >
+                    {lh}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Font family */}
+            <div className="mb-5">
+              <p className="text-[12px] font-semibold uppercase tracking-wider mb-3" style={{ color: `${themeColors.text}66` }}>
+                Шрифт
+              </p>
+              <div className="flex gap-2">
+                {(Object.keys(FONT_FAMILIES) as FontFamily[]).map((ff) => (
+                  <button
+                    key={ff}
+                    onClick={() => setFontFamily(ff)}
+                    className="flex-1 py-3 rounded-xl text-[14px] transition-all"
+                    style={{
+                      backgroundColor: fontFamily === ff ? themeColors.accent : themeColors.secondary,
+                      color: fontFamily === ff ? '#fff' : themeColors.text,
+                      fontFamily: FONT_FAMILIES[ff],
+                      fontWeight: fontFamily === ff ? 600 : 400,
+                    }}
+                  >
+                    {FONT_FAMILY_LABELS[ff]}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Theme */}
+            <div>
+              <p className="text-[12px] font-semibold uppercase tracking-wider mb-3" style={{ color: `${themeColors.text}66` }}>
+                Тема
+              </p>
+              <div className="flex gap-3">
+                {(['light', 'sepia', 'dark'] as ReaderTheme[]).map((t) => {
+                  const ts = THEME_STYLES[t]
+                  const isActive = readerTheme === t
+                  return (
+                    <button
+                      key={t}
+                      onClick={() => setReaderTheme(t)}
+                      className="flex-1 flex flex-col items-center gap-2 py-3 rounded-xl transition-all"
+                      style={{
+                        backgroundColor: ts.bg,
+                        border: isActive ? `2.5px solid ${ts.accent}` : `1.5px solid ${readerTheme === 'dark' ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.1)'}`,
+                      }}
+                    >
+                      <div className="flex gap-0.5">
+                        <div className="w-3 h-4 rounded-sm" style={{ backgroundColor: ts.text, opacity: 0.7 }} />
+                        <div className="w-3 h-4 rounded-sm" style={{ backgroundColor: ts.text, opacity: 0.4 }} />
+                        <div className="w-3 h-4 rounded-sm" style={{ backgroundColor: ts.text, opacity: 0.2 }} />
+                      </div>
+                      <span className="text-[11px] font-semibold" style={{ color: ts.text }}>
+                        {t === 'light' ? 'Светлая' : t === 'sepia' ? 'Сепия' : 'Тёмная'}
+                      </span>
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+          </motion.div>
+        </motion.div>
+      )}
 
       {/* Table of Contents overlay */}
       {showToc && (

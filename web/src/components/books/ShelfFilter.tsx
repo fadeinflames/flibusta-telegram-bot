@@ -11,6 +11,14 @@ interface ShelfFilterProps {
 
 const SHELVES: ShelfKey[] = ['all', 'want', 'reading', 'done', 'recommend']
 
+const SHELF_COLORS: Record<ShelfKey, string> = {
+  all: 'var(--tg-theme-button-color, #2481cc)',
+  want: '#f43f5e',
+  reading: '#22c55e',
+  done: '#3b82f6',
+  recommend: '#f59e0b',
+}
+
 export default function ShelfFilter({ active, counts, onChange }: ShelfFilterProps) {
   const { selection } = useHaptic()
 
@@ -40,7 +48,7 @@ export default function ShelfFilter({ active, counts, onChange }: ShelfFilterPro
               <motion.div
                 layoutId="shelf-pill"
                 className="absolute inset-0 rounded-full"
-                style={{ backgroundColor: 'var(--tg-theme-button-color, #2481cc)' }}
+                style={{ backgroundColor: SHELF_COLORS[shelf] }}
                 transition={{ type: 'spring', damping: 22, stiffness: 280 }}
               />
             )}

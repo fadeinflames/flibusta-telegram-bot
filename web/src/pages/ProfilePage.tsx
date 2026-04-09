@@ -146,23 +146,22 @@ export default function ProfilePage() {
         {p && (
           <div className="grid grid-cols-3 gap-2.5 px-5 mb-6">
             {[
-              { value: p.search_count, label: 'Поисков', icon: (
-                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="var(--tg-theme-button-color, #2481cc)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              { value: p.search_count, label: 'Поисков', color: '#667eea', icon: (
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#667eea" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <circle cx="11" cy="11" r="8" />
                   <line x1="21" y1="21" x2="16.65" y2="16.65" />
                 </svg>
               )},
-              { value: p.download_count, label: 'Загрузок', icon: (
-                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="var(--tg-theme-button-color, #2481cc)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              { value: p.download_count, label: 'Загрузок', color: '#43e97b', icon: (
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#43e97b" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" />
                   <polyline points="7,10 12,15 17,10" />
                   <line x1="12" y1="15" x2="12" y2="3" />
                 </svg>
               )},
-              { value: p.favorites_count, label: 'В библиотеке', icon: (
-                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="var(--tg-theme-button-color, #2481cc)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M4 19.5A2.5 2.5 0 016.5 17H20" />
-                  <path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z" />
+              { value: p.favorites_count, label: 'В библиотеке', color: '#f5576c', icon: (
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#f5576c" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z" />
                 </svg>
               )},
             ].map((stat, i) => (
@@ -171,10 +170,11 @@ export default function ProfilePage() {
                 initial={{ opacity: 0, y: 12 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: 0.2 + i * 0.06, duration: 0.3 }}
-                className="flex flex-col items-center p-4 rounded-2xl"
+                className="flex flex-col items-center p-4 rounded-2xl relative overflow-hidden"
                 style={{ backgroundColor: 'var(--tg-theme-secondary-bg-color, #f0f0f0)' }}
               >
-                <div className="mb-2 opacity-80">{stat.icon}</div>
+                <div className="absolute top-0 left-0 right-0 h-[3px] rounded-t-2xl" style={{ background: `linear-gradient(90deg, ${stat.color}, ${stat.color}88)` }} />
+                <div className="mb-2">{stat.icon}</div>
                 <span className="text-[22px] font-bold" style={{ color: 'var(--tg-theme-text-color, #000)' }}>
                   {stat.value}
                 </span>

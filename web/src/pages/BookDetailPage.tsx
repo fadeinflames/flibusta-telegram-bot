@@ -303,18 +303,31 @@ export default function BookDetailPage() {
           {/* Genre tags */}
           {b.genres.length > 0 && (
             <div className="flex flex-wrap justify-center gap-1.5 mt-3">
-              {b.genres.map((g, i) => (
+              {b.genres.map((g, i) => {
+                const genreColors = [
+                  { bg: 'rgba(102,126,234,0.12)', fg: '#667eea' },
+                  { bg: 'rgba(240,147,251,0.12)', fg: '#d946ef' },
+                  { bg: 'rgba(67,233,123,0.12)', fg: '#22c55e' },
+                  { bg: 'rgba(250,112,154,0.12)', fg: '#f43f5e' },
+                  { bg: 'rgba(79,172,254,0.12)', fg: '#3b82f6' },
+                  { bg: 'rgba(252,203,144,0.12)', fg: '#f59e0b' },
+                  { bg: 'rgba(161,140,209,0.12)', fg: '#8b5cf6' },
+                  { bg: 'rgba(56,249,215,0.12)', fg: '#14b8a6' },
+                ]
+                const gc = genreColors[i % genreColors.length]
+                return (
                 <span
                   key={i}
                   className="px-3 py-1 rounded-full text-[11px] font-semibold"
                   style={{
-                    backgroundColor: 'color-mix(in srgb, var(--tg-theme-button-color, #2481cc) 10%, transparent)',
-                    color: 'var(--tg-theme-button-color, #2481cc)',
+                    backgroundColor: gc.bg,
+                    color: gc.fg,
                   }}
                 >
                   {g}
                 </span>
-              ))}
+                )
+              })}
             </div>
           )}
         </motion.div>

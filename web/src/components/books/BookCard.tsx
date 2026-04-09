@@ -18,11 +18,29 @@ const SHELF_BADGES: Record<string, { label: string; color: string; bg: string }>
   recommend: { label: 'Рекомендую', color: '#FF922B', bg: 'rgba(255,146,43,0.10)' },
 }
 
+const COVER_GRADIENTS = [
+  'linear-gradient(135deg, #667eea, #764ba2)',
+  'linear-gradient(135deg, #f093fb, #f5576c)',
+  'linear-gradient(135deg, #4facfe, #00f2fe)',
+  'linear-gradient(135deg, #43e97b, #38f9d7)',
+  'linear-gradient(135deg, #fa709a, #fee140)',
+  'linear-gradient(135deg, #a18cd1, #fbc2eb)',
+  'linear-gradient(135deg, #fccb90, #d57eeb)',
+  'linear-gradient(135deg, #e0c3fc, #8ec5fc)',
+]
+
+function hashId(str: string): number {
+  let h = 0
+  for (let i = 0; i < str.length; i++) h = ((h << 5) - h + str.charCodeAt(i)) | 0
+  return Math.abs(h)
+}
+
 export default function BookCard({ id, title, author, cover, shelf, subtitle }: BookCardProps) {
   const navigate = useNavigate()
   const { impact } = useHaptic()
 
   const badge = shelf ? SHELF_BADGES[shelf] : null
+  const placeholderGradient = COVER_GRADIENTS[hashId(id) % COVER_GRADIENTS.length]
 
   return (
     <motion.button
@@ -58,26 +76,11 @@ export default function BookCard({ id, title, author, cover, shelf, subtitle }: 
         ) : (
           <div
             className="w-full h-full flex items-center justify-center"
-            style={{
-              background: `linear-gradient(145deg,
-                color-mix(in srgb, var(--tg-theme-button-color, #2481cc) 8%, var(--tg-theme-secondary-bg-color, #f0f0f0)),
-                var(--tg-theme-secondary-bg-color, #f0f0f0))`,
-            }}
+            style={{ background: placeholderGradient }}
           >
-            <svg
-              width="22"
-              height="22"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="var(--tg-theme-hint-color, #999)"
-              strokeWidth="1.5"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              style={{ opacity: 0.4 }}
-            >
-              <path d="M4 19.5A2.5 2.5 0 016.5 17H20" />
-              <path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z" />
-            </svg>
+            <span className="text-[22px] font-bold text-white" style={{ opacity: 0.85, textShadow: '0 1px 4px rgba(0,0,0,0.15)' }}>
+              {(title || '?')[0].toUpperCase()}
+            </span>
           </div>
         )}
       </div>
