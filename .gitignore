@@ -1,5 +1,6 @@
 books/
 bot_ico/
+node_modules/
 .vscode
 .idea
 .claude

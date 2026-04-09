@@ -4,3 +4,6 @@ TOKEN='0123456789:abracadabra'
 RUTRACKER_USERNAME=''
 RUTRACKER_PASSWORD=''
 # RUTRACKER_DOWNLOAD_DIR='/srv/downloads'  # по умолчанию ./downloads рядом с проектом
+
+# Web API
+# WEB_PORT=8000  # порт, на котором будет доступен веб-интерфейс (по умолчанию 8000)

@@ -6,6 +6,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      target: bot
     restart: always
     env_file:
       - .env
@@ -14,11 +15,35 @@ services:
       - ./logs:/srv/logs
       - ./data:/srv/data
       - ./downloads:/srv/downloads
-      # Раскомментируйте для hot-reload при разработке:
-      # - ./src:/srv/src
     healthcheck:
       test: ["CMD", "pgrep", "-f", "python src/srv.py"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 15s
+
+  web:
+    container_name: flibusta-web
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: web
+    restart: always
+    env_file:
+      - .env
+    ports:
+      - "${WEB_PORT:-8000}:8000"
+    volumes:
+      - ./books:/srv/books
+      - ./logs:/srv/logs
+      - ./data:/srv/data
+      - ./downloads:/srv/downloads
+    depends_on:
+      tg-bot:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
