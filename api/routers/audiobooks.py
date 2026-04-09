@@ -11,6 +11,8 @@ from pydantic import BaseModel
 from api.auth import decode_access_token
 from api.deps import CurrentUser
 from src import database as db
+from src import flib
+from src import rt_cache
 from src import rutracker
 from src.config import RUTRACKER_DOWNLOAD_DIR
 
@@ -19,6 +21,51 @@ class UpdateProgressBody(BaseModel):
     chapter: int = 0
 
 router = APIRouter(prefix="/api/audiobooks", tags=["audiobooks"])
+
+
+def _extract_search_query(title: str) -> str:
+    """Extract book title from RuTracker topic title for Flibusta search.
+
+    Typical formats:
+    - "Автор - Название книги (Чтец) [2024, ...]"
+    - "Автор - Название книги [аудиокнига]"
+    """
+    import re
+    # Remove bracketed parts: (чтец), [год, формат], etc.
+    clean = re.sub(r'\[.*?\]', '', title)
+    clean = re.sub(r'\(.*?\)', '', clean)
+    clean = clean.strip(' -–—')
+    # Take "Author - Title" → just "Title" for better search
+    if ' - ' in clean:
+        parts = clean.split(' - ', 1)
+        return parts[1].strip()
+    return clean
+
+
+async def _get_flibusta_description(title: str) -> str | None:
+    """Try to find book on Flibusta and return its annotation."""
+    query = _extract_search_query(title)
+    if not query or len(query) < 3:
+        return None
+
+    cache_key = rt_cache.search_key(f"flib_desc:{query}")
+    cached = rt_cache.get(cache_key)
+    if cached is not None:
+        return cached.get("annotation") if cached else None
+
+    try:
+        books = await asyncio.to_thread(flib.scrape_books_by_title, query)
+        if books:
+            # Get full details for the first match
+            book = await asyncio.to_thread(flib.get_book_by_id, books[0].id)
+            if book and book.annotation:
+                rt_cache.set(cache_key, {"annotation": book.annotation}, rt_cache.TTL_TOPIC_INFO)
+                return book.annotation
+    except Exception:
+        pass
+
+    rt_cache.set(cache_key, {}, rt_cache.TTL_SEARCH)
+    return None
 
 
 @router.get("/search")
@@ -45,14 +92,20 @@ async def search_audiobooks(q: str, user: CurrentUser, limit: int = 15):
 
 @router.get("/{topic_id}/info")
 async def get_topic_info(topic_id: str, user: CurrentUser):
-    """Get topic info with file list."""
+    """Get topic info with file list. Description from Flibusta when available."""
     info = await asyncio.to_thread(rutracker.get_topic_info, topic_id)
     if not info:
         raise HTTPException(404, "Topic not found")
+
+    # Try to get a better description from Flibusta
+    description = await _get_flibusta_description(info.title)
+    if not description:
+        description = info.description
+
     return {
         "topic_id": info.topic_id,
         "title": info.title,
-        "description": info.description,
+        "description": description,
         "forum_name": info.forum_name,
         "topic_url": info.topic_url,
         "files": info.files,
