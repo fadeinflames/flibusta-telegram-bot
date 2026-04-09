@@ -1,5 +1,3 @@
-version: '3'
-
 services:
   tg-bot:
     container_name: flibusta-tg-bot
@@ -15,12 +13,19 @@ services:
       - ./logs:/srv/logs
       - ./data:/srv/data
       - ./downloads:/srv/downloads
+    # pgrep is not in python:*-slim; verify PID 1 is still the bot (CMD: python src/srv.py)
     healthcheck:
-      test: ["CMD", "pgrep", "-f", "python src/srv.py"]
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import sys; sys.exit(0 if b'srv.py' in open('/proc/1/cmdline', 'rb').read() else 1)",
+        ]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 15s
+      start_period: 45s
 
   web:
     container_name: flibusta-web
