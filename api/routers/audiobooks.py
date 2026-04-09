@@ -62,18 +62,24 @@ async def get_topic_info(topic_id: str, user: CurrentUser):
 
 @router.get("/{topic_id}/files")
 async def get_topic_files(topic_id: str, user: CurrentUser):
-    """Get structured file list with sizes."""
+    """Get structured file list with sizes.
+
+    Returns sequential indices (0, 1, 2...) that match the order
+    used by the /stream endpoint (sorted by filename).
+    """
     files = await asyncio.to_thread(rutracker.get_topic_files, topic_id)
+    # Sort by filename to match the stream endpoint's file ordering
+    sorted_files = sorted(files, key=lambda f: f.filename)
     return {
         "items": [
             {
                 "filename": f.filename,
                 "size_bytes": f.size_bytes,
-                "index": f.index_in_torrent,
+                "index": i,
             }
-            for f in files
+            for i, f in enumerate(sorted_files)
         ],
-        "total": len(files),
+        "total": len(sorted_files),
     }
 
 
