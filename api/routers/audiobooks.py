@@ -183,10 +183,14 @@ async def stream_audio(topic_id: str, file_index: int, request: Request, token: 
     range_header = request.headers.get("range")
     if range_header:
         # Parse "bytes=start-end"
-        range_match = range_header.replace("bytes=", "").split("-")
-        start = int(range_match[0]) if range_match[0] else 0
-        end = int(range_match[1]) if len(range_match) > 1 and range_match[1] else file_size - 1
-        end = min(end, file_size - 1)
+        try:
+            range_match = range_header.replace("bytes=", "").split("-")
+            start = int(range_match[0]) if range_match[0] else 0
+            end = int(range_match[1]) if len(range_match) > 1 and range_match[1] else file_size - 1
+        except (ValueError, IndexError):
+            raise HTTPException(416, "Invalid Range header")
+        start = max(0, min(start, file_size - 1))
+        end = max(start, min(end, file_size - 1))
         length = end - start + 1
 
         def iter_range():

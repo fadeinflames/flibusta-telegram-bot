@@ -303,7 +303,7 @@ async def handle_rt_pick(
 
     file_indices = [f.index_in_torrent for f in files]
     chapter_pos = next(
-        i for i, f in enumerate(files) if f.index_in_torrent == file_index
+        (i for i, f in enumerate(files) if f.index_in_torrent == file_index), 0
     )
     author = ""
     fb_id = context.user_data.get("rt_flibusta_book_id")
@@ -366,7 +366,10 @@ async def handle_rt_page(
 ) -> None:
     """Paginate search results."""
     await query.answer()
-    page = int(data[len("rt_page_"):])
+    try:
+        page = int(data[len("rt_page_"):])
+    except ValueError:
+        return
 
     cached = context.user_data.get(_RT_RESULTS_KEY, {})
     results = cached.get("results", [])

@@ -13,9 +13,17 @@ from jose import jwt
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_DAYS = 30
 
+_JWT_DEFAULT = "dev-secret-change-me"
+
 
 def get_jwt_secret() -> str:
-    return os.getenv("JWT_SECRET", "dev-secret-change-me")
+    secret = os.getenv("JWT_SECRET", _JWT_DEFAULT)
+    if secret == _JWT_DEFAULT:
+        import logging
+        logging.getLogger(__name__).warning(
+            "JWT_SECRET not set — using insecure default! Set JWT_SECRET in .env for production."
+        )
+    return secret
 
 
 def get_bot_token() -> str:
@@ -113,5 +121,5 @@ def decode_access_token(token: str) -> dict | None:
             "username": payload.get("username"),
             "photo_url": payload.get("photo_url"),
         }
-    except Exception:
+    except (jwt.JWTError, jwt.ExpiredSignatureError, ValueError, KeyError):
         return None

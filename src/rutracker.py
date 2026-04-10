@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -25,6 +26,7 @@ _HEADERS = {
 
 # Singleton session — login once, reuse across requests
 _session: requests.Session | None = None
+_session_lock = threading.Lock()
 
 _SERIES_PATTERNS = [
     r"\bserial\b",
@@ -53,10 +55,11 @@ def _new_session() -> requests.Session:
 def get_session() -> requests.Session:
     """Return an authenticated session, logging in if needed."""
     global _session
-    if _session is None:
-        _session = _new_session()
-        _login(_session)
-    return _session
+    with _session_lock:
+        if _session is None:
+            _session = _new_session()
+            _login(_session)
+        return _session
 
 
 def _login(s: requests.Session) -> None:
@@ -81,7 +84,8 @@ def _login(s: requests.Session) -> None:
 def reset_session() -> None:
     """Force re-login on next request (e.g. after session expiry)."""
     global _session
-    _session = None
+    with _session_lock:
+        _session = None
 
 
 @dataclass
@@ -178,7 +182,8 @@ def search(query: str, limit: int = 10) -> list[RTopic]:
         topic_id = m.group(1)
 
         size_td = row.select_one("td.tor-size")
-        size = size_td.get_text(strip=True).split()[0] if size_td else "?"
+        size_text = size_td.get_text(strip=True) if size_td else ""
+        size = size_text.split()[0] if size_text else "?"
 
         # Seeds / leechers (columns on tracker; «пиры» в разговорной речи часто = личи + сиды)
         seeds_span = row.select_one("b.seedmed, span.seedmed")

@@ -16,6 +16,9 @@ requests = "^2.31"
 beautifulsoup4 = "^4.12"
 lxml = "^4.9"
 json-log-formatter = "^1.1"
+fastapi = ">=0.115,<1"
+uvicorn = {version = ">=0.34,<1", extras = ["standard"]}
+python-jose = {version = ">=3.3,<4", extras = ["cryptography"]}
 
 
 [tool.poetry.group.dev.dependencies]

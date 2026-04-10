@@ -599,7 +599,7 @@ def download_book(book: Book, b_format: str) -> tuple[io.BytesIO | None, str | N
 
             # Check Content-Length if available
             content_length = b_response.headers.get("content-length")
-            if content_length and int(content_length) > config.MAX_DOWNLOAD_SIZE:
+            if content_length and content_length.isdigit() and int(content_length) > config.MAX_DOWNLOAD_SIZE:
                 raise DownloadTooLargeError(f"File size {int(content_length)} exceeds limit {config.MAX_DOWNLOAD_SIZE}")
 
             # Получаем имя файла из заголовков
@@ -612,7 +612,7 @@ def download_book(book: Book, b_format: str) -> tuple[io.BytesIO | None, str | N
                 if b_filename.endswith(".fb2.zip"):
                     b_filename = b_filename.replace(".zip", "")
             else:
-                ext = b_format.split("(")[1].split(")")[0] if "(" in b_format else "txt"
+                ext = b_format.split("(")[1].split(")")[0] if "(" in b_format and ")" in b_format else "txt"
                 ext = re.sub(r"[^a-zA-Z0-9]", "", ext.lower())
                 b_filename = f"{book.title} - {book.author}.{ext}"
                 b_filename = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", b_filename)

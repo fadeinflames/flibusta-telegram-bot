@@ -11,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from api.deps import CurrentUser
 from api.routers import auth_router, audiobooks, books, downloads, library, profile, search
 from src import database as db
 from src import rt_cache
@@ -48,10 +49,13 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Flibusta WebApp API", lifespan=lifespan)
 
-# CORS for development (Vite dev server)
+# CORS — restrict in production, allow all in dev
+_cors_origins = os.getenv("CORS_ORIGINS", "").strip()
+_allowed_origins = [o.strip() for o in _cors_origins.split(",") if o.strip()] if _cors_origins else ["*"]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -73,16 +77,16 @@ async def health():
 
 
 @app.post("/api/cache/cleanup")
-async def cache_cleanup():
-    """Manually trigger cache cleanup (remove expired entries)."""
+async def cache_cleanup(user: CurrentUser):
+    """Manually trigger cache cleanup (remove expired entries). Requires auth."""
     deleted = await asyncio.to_thread(rt_cache.cleanup_expired)
     stats = await asyncio.to_thread(rt_cache.get_stats)
     return {"deleted": deleted, **stats}
 
 
 @app.delete("/api/cache")
-async def cache_clear():
-    """Clear entire cache."""
+async def cache_clear(user: CurrentUser):
+    """Clear entire cache. Requires auth."""
     cleared = await asyncio.to_thread(rt_cache.clear_all)
     return {"cleared": cleared}
 
