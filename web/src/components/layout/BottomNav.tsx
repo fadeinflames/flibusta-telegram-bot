@@ -3,8 +3,8 @@ import { motion } from 'framer-motion'
 import { useHaptic } from '../../hooks/useTelegram'
 
 const tabs = [
+  { path: '/home', label: 'Главная', icon: HomeIcon },
   { path: '/library', label: 'Книги', icon: BookIcon },
-  { path: '/audiobooks', label: 'Аудио', icon: HeadphonesIcon },
   { path: '/search', label: 'Поиск', icon: SearchIcon },
   { path: '/downloads', label: 'Загрузки', icon: DownloadIcon },
   { path: '/profile', label: 'Профиль', icon: PersonIcon },
@@ -87,6 +87,24 @@ export default function BottomNav() {
 }
 
 /* ──────── Icons ──────── */
+
+function HomeIcon({ active }: { active: boolean }) {
+  const color = active ? 'var(--tg-theme-button-color, #2481cc)' : 'var(--tg-theme-hint-color, #999)'
+  return (
+    <svg
+      width="22" height="22" viewBox="0 0 24 24"
+      fill={active ? color : 'none'}
+      stroke={color}
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      style={{ opacity: active ? 1 : 0.7, transition: 'opacity 0.2s ease' }}
+    >
+      <path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z" />
+      <polyline points="9,22 9,12 15,12 15,22" />
+    </svg>
+  )
+}
 
 function BookIcon({ active }: { active: boolean }) {
   const color = active ? 'var(--tg-theme-button-color, #2481cc)' : 'var(--tg-theme-hint-color, #999)'

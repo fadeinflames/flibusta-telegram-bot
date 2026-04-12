@@ -404,7 +404,7 @@ export default function BookDetailPage() {
           </motion.div>
         )}
 
-        {/* Download format cards */}
+        {/* Download format cards - improved with colored format badges */}
         {formats.length > 0 && (
           <motion.div
             initial={{ opacity: 0, y: 12 }}
@@ -418,34 +418,46 @@ export default function BookDetailPage() {
             >
               Скачать
             </p>
-            <div className="grid grid-cols-3 gap-2.5">
-              {formats.map((fmt) => (
-                <motion.button
-                  key={fmt}
-                  whileTap={{ scale: 0.93 }}
-                  onClick={() => handleDownload(fmt)}
-                  className="flex flex-col items-center gap-1.5 py-4 rounded-2xl"
-                  style={{
-                    backgroundColor: 'var(--tg-theme-secondary-bg-color, #f0f0f0)',
-                  }}
-                >
-                  <svg
-                    width="22" height="22" viewBox="0 0 24 24" fill="none"
-                    stroke="var(--tg-theme-button-color, #2481cc)"
-                    strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"
+            <div className="flex flex-wrap gap-2">
+              {formats.map((fmt) => {
+                const fmtKey = fmt.toLowerCase()
+                const formatStyles: Record<string, { bg: string; color: string; icon: string }> = {
+                  fb2: { bg: 'rgba(102,126,234,0.12)', color: '#667eea', icon: '📖' },
+                  epub: { bg: 'rgba(64,192,87,0.12)', color: '#40C057', icon: '📱' },
+                  mobi: { bg: 'rgba(255,146,43,0.12)', color: '#FF922B', icon: '📲' },
+                  pdf: { bg: 'rgba(239,68,68,0.12)', color: '#ef4444', icon: '📄' },
+                  djvu: { bg: 'rgba(139,92,246,0.12)', color: '#8b5cf6', icon: '🔍' },
+                  doc: { bg: 'rgba(59,130,246,0.12)', color: '#3b82f6', icon: '📝' },
+                }
+                const style = formatStyles[fmtKey] || { bg: 'rgba(0,0,0,0.06)', color: 'var(--tg-theme-text-color)', icon: '📁' }
+                return (
+                  <motion.button
+                    key={fmt}
+                    whileTap={{ scale: 0.93 }}
+                    onClick={() => handleDownload(fmt)}
+                    className="flex items-center gap-2 px-4 py-3 rounded-2xl"
+                    style={{ backgroundColor: style.bg }}
                   >
-                    <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" />
-                    <polyline points="7,10 12,15 17,10" />
-                    <line x1="12" y1="15" x2="12" y2="3" />
-                  </svg>
-                  <span
-                    className="text-[13px] font-bold uppercase"
-                    style={{ color: 'var(--tg-theme-text-color, #000)' }}
-                  >
-                    {fmt}
-                  </span>
-                </motion.button>
-              ))}
+                    <span className="text-[14px]">{style.icon}</span>
+                    <span
+                      className="text-[13px] font-bold uppercase"
+                      style={{ color: style.color }}
+                    >
+                      {fmt}
+                    </span>
+                    <svg
+                      width="14" height="14" viewBox="0 0 24 24" fill="none"
+                      stroke={style.color}
+                      strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+                      style={{ opacity: 0.7 }}
+                    >
+                      <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" />
+                      <polyline points="7,10 12,15 17,10" />
+                      <line x1="12" y1="15" x2="12" y2="3" />
+                    </svg>
+                  </motion.button>
+                )
+              })}
             </div>
           </motion.div>
         )}

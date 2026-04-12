@@ -9,6 +9,7 @@ interface BookCardProps {
   cover?: string
   shelf?: string | null
   subtitle?: string
+  progress?: number // 0-100, reading progress
 }
 
 const SHELF_BADGES: Record<string, { label: string; color: string; bg: string }> = {
@@ -35,7 +36,7 @@ function hashId(str: string): number {
   return Math.abs(h)
 }
 
-export default function BookCard({ id, title, author, cover, shelf, subtitle }: BookCardProps) {
+export default function BookCard({ id, title, author, cover, shelf, subtitle, progress }: BookCardProps) {
   const navigate = useNavigate()
   const { impact } = useHaptic()
 
@@ -113,7 +114,25 @@ export default function BookCard({ id, title, author, cover, shelf, subtitle }: 
             {subtitle}
           </p>
         )}
-        {badge && (
+        {/* Reading progress bar */}
+        {progress !== undefined && progress > 0 && (
+          <div className="flex items-center gap-2 mt-1.5">
+            <div className="flex-1 h-[4px] rounded-full overflow-hidden" style={{ backgroundColor: 'color-mix(in srgb, var(--tg-theme-text-color, #000) 8%, transparent)' }}>
+              <div
+                className="h-full rounded-full"
+                style={{
+                  width: `${Math.min(100, progress)}%`,
+                  backgroundColor: progress >= 100 ? '#40C057' : 'var(--tg-theme-button-color, #2481cc)',
+                  transition: 'width 0.3s ease',
+                }}
+              />
+            </div>
+            <span className="text-[11px] font-semibold tabular-nums flex-shrink-0" style={{ color: 'var(--tg-theme-hint-color, #999)' }}>
+              {Math.round(progress)}%
+            </span>
+          </div>
+        )}
+        {badge && !progress && (
           <span
             className="inline-flex items-center mt-1.5 px-2.5 py-[3px] rounded-full text-[11px] font-semibold self-start"
             style={{

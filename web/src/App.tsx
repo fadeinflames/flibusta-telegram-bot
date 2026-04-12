@@ -22,6 +22,7 @@ import DownloadsPage from './pages/DownloadsPage'
 import ProfilePage from './pages/ProfilePage'
 import BookDetailPage from './pages/BookDetailPage'
 import BookReaderPage from './pages/BookReaderPage'
+import DiscoveryPage from './pages/DiscoveryPage'
 
 function PublicRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated } = useAuth()
@@ -63,7 +64,8 @@ export default function App() {
     <Routes>
       <Route path="/login" element={<PublicRoute><LoginPage /></PublicRoute>} />
       <Route path="/" element={<ProtectedRoute><Layout /></ProtectedRoute>}>
-        <Route index element={<Navigate to="/search" replace />} />
+        <Route index element={<Navigate to="/home" replace />} />
+        <Route path="home" element={<DiscoveryPage />} />
         <Route path="library" element={<LibraryPage />} />
         <Route path="search" element={<SearchPage />} />
         <Route path="audiobooks" element={<AudiobooksPage />} />

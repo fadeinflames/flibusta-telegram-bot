@@ -310,25 +310,75 @@ export default function SearchPage() {
               </motion.div>
             )}
 
+            {/* Genre quick search pills */}
+            <motion.div
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.1 }}
+              className="px-5 mt-5"
+            >
+              <div className="flex items-center gap-2 mb-3">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
+                  style={{ color: 'var(--tg-theme-hint-color, #999)' }}>
+                  <path d="M12 2L2 7l10 5 10-5-10-5z" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                  <path d="M2 17l10 5 10-5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                  <path d="M2 12l10 5 10-5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+                <p
+                  className="text-[13px] font-semibold uppercase tracking-wider"
+                  style={{ color: 'var(--tg-theme-section-header-text-color, #6d6d72)' }}
+                >
+                  Попробуйте найти
+                </p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {[
+                  { label: '🔥 Фантастика', query: 'фантастика' },
+                  { label: '💘 Романы', query: 'роман' },
+                  { label: '🔎 Детективы', query: 'детектив' },
+                  { label: '📚 Классика', query: 'классика' },
+                  { label: '🧠 Психология', query: 'психология' },
+                  { label: '💼 Бизнес', query: 'бизнес' },
+                  { label: '👶 Детям', query: 'детские' },
+                  { label: '🏛 История', query: 'история' },
+                ].map((genre, i) => (
+                  <motion.button
+                    key={genre.query}
+                    initial={{ opacity: 0, scale: 0.9 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    transition={{ delay: i * 0.03 }}
+                    whileTap={{ scale: 0.93 }}
+                    onClick={() => { selection(); setQuery(genre.query); setDebouncedQuery(genre.query) }}
+                    className="px-3.5 py-2 rounded-xl text-[13px] font-medium"
+                    style={{
+                      backgroundColor: 'var(--tg-theme-secondary-bg-color, #f0f0f0)',
+                      color: 'var(--tg-theme-text-color, #000)',
+                    }}
+                  >
+                    {genre.label}
+                  </motion.button>
+                ))}
+              </div>
+            </motion.div>
+
             {/* Empty state -- no history */}
             {(!history.data?.items || history.data.items.length === 0) && (
               <motion.div
                 initial={{ opacity: 0, y: 16 }}
                 animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: 0.1, type: 'spring', damping: 20, stiffness: 200 }}
-                className="flex flex-col items-center justify-center pt-16 px-8"
+                transition={{ delay: 0.2, type: 'spring', damping: 20, stiffness: 200 }}
+                className="flex flex-col items-center justify-center pt-10 px-8"
               >
-                {/* Decorative icon cluster */}
-                <div className="relative mb-6">
+                <div className="relative mb-5">
                   <motion.div
                     animate={{ y: [0, -5, 0] }}
                     transition={{ duration: 4, repeat: Infinity, ease: 'easeInOut' }}
-                    className="w-[80px] h-[80px] rounded-[22px] flex items-center justify-center"
+                    className="w-[72px] h-[72px] rounded-[20px] flex items-center justify-center"
                     style={{
                       background: 'linear-gradient(135deg, color-mix(in srgb, var(--tg-theme-button-color, #2481cc) 15%, transparent), color-mix(in srgb, var(--tg-theme-button-color, #2481cc) 8%, transparent))',
                     }}
                   >
-                    <svg width="36" height="36" viewBox="0 0 24 24" fill="none"
+                    <svg width="32" height="32" viewBox="0 0 24 24" fill="none"
                       style={{ color: 'var(--tg-theme-button-color, #2481cc)' }}>
                       <circle cx="11" cy="11" r="8" stroke="currentColor" strokeWidth="1.5" />
                       <path d="M21 21l-4.35-4.35" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
@@ -336,16 +386,16 @@ export default function SearchPage() {
                   </motion.div>
                 </div>
                 <p
-                  className="text-[18px] font-bold text-center"
+                  className="text-[17px] font-bold text-center"
                   style={{ color: 'var(--tg-theme-text-color, #000)' }}
                 >
-                  Найдите свою книгу
+                  Введите запрос
                 </p>
                 <p
-                  className="text-[14px] text-center mt-2 max-w-[260px] leading-relaxed"
+                  className="text-[14px] text-center mt-1.5 max-w-[260px] leading-relaxed"
                   style={{ color: 'var(--tg-theme-hint-color, #999)' }}
                 >
-                  Введите название или имя автора, и мы найдем нужное издание
+                  Или выберите жанр из списка выше
                 </p>
               </motion.div>
             )}
